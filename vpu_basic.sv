@@ -95,6 +95,24 @@ module vpu_basic #(
     end
   endfunction
 
+  function automatic logic [X_RFW_WIDTH-1:0] relu8(
+      input logic [X_RFR_WIDTH-1:0] a);
+    logic signed [7:0] a0, a1, a2, a3;
+    logic signed [7:0] c0, c1, c2, c3;
+    begin
+      a0 = a[7:0];   a1 = a[15:8];  a2 = a[23:16]; a3 = a[31:24];
+      c0 = (a0 > 0) ? a0 : 0;
+      c1 = (a1 > 0) ? a1 : 0;
+      c2 = (a2 > 0) ? a2 : 0;
+      c3 = (a3 > 0) ? a3 : 0;
+      relu8 = '0;
+      relu8[7:0]   = c0;
+      relu8[15:8]  = c1;
+      relu8[23:16] = c2;
+      relu8[31:24] = c3;
+    end
+  endfunction
+
   always_comb begin
     issue_supported = is_vpu_instruction(xif.issue_req.instr);
 
@@ -102,7 +120,8 @@ module vpu_basic #(
     xif.issue_resp = '0;
     xif.issue_resp.accept = issue_supported;
     xif.issue_resp.writeback[0] = issue_supported;
-    xif.issue_resp.register_read[1:0] = issue_supported ? 2'b11 : 2'b00;
+    xif.issue_resp.register_read[1:0] = issue_supported ?
+      ((xif.issue_req.instr[14:12] == VPU_FUNCT3_RELU8) ? 2'b01 : 2'b11) : 2'b00;
     xif.issue_resp.loadstore = 1'b0;
 
     // X_ISSUE_REGISTER_SPLIT=1: register_valid is a one-cycle CPU pulse.
@@ -129,7 +148,8 @@ module vpu_basic #(
                        (state_q == S_WAIT_REG) &&
                        (xif.register.id == id_q) &&
                        (xif.register.hartid == hartid_q) &&
-                       (&xif.register.rs_valid[1:0]);
+                       xif.register.rs_valid[0] &&
+                       ((op_q == VPU_OP_RELU8) || xif.register.rs_valid[1]);
   wire commit_fire = xif.commit_valid &&
                      (xif.commit.id == id_q) &&
                      (xif.commit.hartid == hartid_q);
@@ -185,6 +205,7 @@ module vpu_basic #(
                 VPU_OP_DOT8: result_q <= dot8(xif.register.rs[0], xif.register.rs[1]);
                 VPU_OP_ADD8: result_q <= add8(xif.register.rs[0], xif.register.rs[1]);
                 VPU_OP_MAX8: result_q <= max8(xif.register.rs[0], xif.register.rs[1]);
+                VPU_OP_RELU8: result_q <= relu8(xif.register.rs[0]);
                 default: result_q <= '0;
               endcase
               state_q <= S_RESULT;
@@ -208,6 +229,7 @@ module vpu_basic #(
                 VPU_OP_DOT8: result_q <= dot8(rs1_q, rs2_q);
                 VPU_OP_ADD8: result_q <= add8(rs1_q, rs2_q);
                 VPU_OP_MAX8: result_q <= max8(rs1_q, rs2_q);
+                VPU_OP_RELU8: result_q <= relu8(rs1_q);
                 default: result_q <= '0;
               endcase
               state_q <= S_RESULT;

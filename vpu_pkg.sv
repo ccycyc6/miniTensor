@@ -15,12 +15,14 @@ package vpu_pkg;
   localparam logic [2:0] VPU_FUNCT3_DOT8    = 3'b010;
   localparam logic [2:0] VPU_FUNCT3_ADD8    = 3'b011;
   localparam logic [2:0] VPU_FUNCT3_MAX8    = 3'b100;
+  localparam logic [2:0] VPU_FUNCT3_RELU8   = 3'b101;
 
   localparam logic [2:0] VPU_OP_ADD         = 3'd0;
   localparam logic [2:0] VPU_OP_XOR         = 3'd1;
   localparam logic [2:0] VPU_OP_DOT8        = 3'd2;
   localparam logic [2:0] VPU_OP_ADD8        = 3'd3;
   localparam logic [2:0] VPU_OP_MAX8        = 3'd4;
+  localparam logic [2:0] VPU_OP_RELU8       = 3'd5;
   localparam logic [2:0] VPU_OP_INVALID     = 3'd7;
 
   // Operand and destination fields are intentionally don't-care for decode.
@@ -33,7 +35,8 @@ package vpu_pkg;
          (instr[14:12] == VPU_FUNCT3_XOR) ||
          (instr[14:12] == VPU_FUNCT3_DOT8) ||
          (instr[14:12] == VPU_FUNCT3_ADD8) ||
-         (instr[14:12] == VPU_FUNCT3_MAX8));
+         (instr[14:12] == VPU_FUNCT3_MAX8) ||
+         (instr[14:12] == VPU_FUNCT3_RELU8));
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
 
@@ -48,8 +51,10 @@ package vpu_pkg;
       decode_vpu_op = VPU_OP_DOT8;
     end else if (instr[14:12] == VPU_FUNCT3_ADD8) begin
       decode_vpu_op = VPU_OP_ADD8;
-    end else begin
+    end else if (instr[14:12] == VPU_FUNCT3_MAX8) begin
       decode_vpu_op = VPU_OP_MAX8;
+    end else begin
+      decode_vpu_op = VPU_OP_RELU8;
     end
   endfunction
 

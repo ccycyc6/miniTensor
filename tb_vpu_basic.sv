@@ -65,7 +65,9 @@ module tb_vpu_basic;
       while (!xif.issue_ready) @(negedge clk);
       #1;
       if (!xif.issue_resp.accept || !xif.issue_resp.writeback[0] ||
-          xif.issue_resp.register_read[1:0] != 2'b11 ||
+          xif.issue_resp.register_read[0] != 1'b1 ||
+          xif.issue_resp.register_read[1] !=
+            (instr[14:12] != VPU_FUNCT3_RELU8) ||
           xif.issue_resp.loadstore)
         $fatal(1, "issue response mismatch");
       @(posedge clk);
@@ -166,6 +168,11 @@ module tb_vpu_basic;
     issue_and_register(make_vpu_rtype(VPU_FUNCT3_MAX8, 5'd11, 5'd1, 5'd2),
                        4'd8, 32'h05fe7f80, 32'hfb038000);
     commit_and_check(4'd8, 32'h05037f00, 5'd11);
+
+    $display("[1e] VRELU8: signed four-lane INT8 ReLU -> rd=x12 data=0x7f050000");
+    issue_and_register(make_vpu_rtype(VPU_FUNCT3_RELU8, 5'd12, 5'd1, 5'd0),
+                       4'd9, 32'h7f05ff80, 32'hdeadbeef);
+    commit_and_check(4'd9, 32'h7f050000, 5'd12);
 
     $display("[2] VXOR: result remains stable while result_ready=0");
     issue_and_register(make_vpu_rtype(VPU_FUNCT3_XOR, 5'd5, 5'd6, 5'd7),

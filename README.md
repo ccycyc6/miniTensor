@@ -53,6 +53,8 @@ VADD8: custom-0, funct7=0000001, funct3=011,
        four independent 8-bit lane additions, wrapping at 8 bits
 VMAX8: custom-0, funct7=0000001, funct3=100,
        signed maximum of each independent 8-bit lane
+VRELU8: custom-0, funct7=0000001, funct3=101,
+        signed INT8 ReLU per lane: max(signed(lane), 0); rs2 is unused
 ```
 
 它们是验证 CV-X-IF 通信的占位指令，不是最终向量 ISA。
@@ -78,6 +80,7 @@ make npc-sim
 [1b] VDOT8: signed four-lane INT8 dot product -> rd=x9 data=368
 [1c] VADD8: four independent 8-bit lanes with wraparound -> rd=x10 data=0x02040608
 [1d] VMAX8: signed four-lane INT8 maximum -> rd=x11 data=0x05037f00
+[1e] VRELU8: signed four-lane INT8 ReLU -> rd=x12 data=0x7f050000
 [2] VXOR: result remains stable while result_ready=0
 [3] Standard ADD is rejected by the VPU
 [4] A killed VADD produces no result
