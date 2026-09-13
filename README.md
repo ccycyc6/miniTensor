@@ -16,11 +16,14 @@ logic [X_NUM_RS-1:0][X_RFR_WIDTH-1:0] rs;
 - `vpu_basic.sv`：直接使用 `core_v_xif` 的最小协处理器；数据宽度从接口类型自动推导。
 - `vpu_compute.sv`：纯组合执行单元，集中实现 VADD、VXOR、VDOT8、VADD8、VMAX8、VRELU8。
 - `vpu_vector_regfile.sv`：独立的 32×128-bit 本地向量寄存器堆，双读口、单写口、byte write mask。
+- `vpu_vector_alu.sv`：16-lane INT8 向量 ALU，支持 VADD8、VMAX8、VRELU8。
+- `vpu_vector_controller.sv`：按向量指令字段解码，调度 VRF 双读和 ALU，按结果握手写回 VRF。
 - `vpu_npc_model.sv`：模拟 NPC 的指令、GPR 操作数、commit/kill 和写回握手，不修改 NPC。
 - `vpu_pkg.sv`：custom-0 指令的编码和解码。
 - `tb_vpu_basic.sv`：通过官方接口字段驱动的自检 testbench。
 - `tb_vpu_npc_model.sv`：NPC-facing 适配器的独立仿真 demo。
 - `tb_vpu_vector_regfile.sv`：向量寄存器堆的复位、双读和掩码写测试。
+- `tb_vpu_vector_controller.sv`：向量字段、控制握手和 VRF 写回闭环测试。
 - `Makefile`：Verilator 仿真和 VCD 波形。
 
 已删除原来的扁平 `vpu_basic_core.sv`，避免维护两套接口实现。
@@ -71,14 +74,43 @@ CV-X-IF issue/register/commit/result
                  |
             vpu_compute
 
-vpu_vector_regfile
-  双读、单写、byte mask
-  （当前独立验证，待后续向量指令绑定）
+vector instruction controller
+  cmd_valid/cmd_ready -> VRF 双读 -> vector ALU
+  result_valid/result_ready -> vd 写回 VRF
+  load_valid/load_ready -> VRF 初始化（与 command 互斥）
 ```
 
 `vpu_basic` 只负责 CV-X-IF 事务状态机；`vpu_compute` 只负责组合计算；
-`vpu_vector_regfile` 只负责本地向量寄存器存储。当前没有擅自定义 VRF 的
-load/store 指令，后续确定向量 ISA 后再连接寄存器寻址和控制逻辑。
+`vpu_vector_regfile` 只负责本地向量寄存器存储。`vpu_vector_controller` 负责
+向量指令的字段解析、VRF 读端口连接、ALU 调度和结果写回。
+
+## 向量指令字段与控制协议
+
+向量指令采用 custom-0 R-type 编码（`opcode=7'b0001011`）：
+
+```text
+31:25 funct7 = 7'b0000010   向量指令族
+24:20 vs2                     源向量寄存器 2
+19:15 vs1                     源向量寄存器 1
+14:12 funct3                  ADD8/MAX8/RELU8
+11:7  vd                      目标向量寄存器
+6:0   opcode                  custom-0
+```
+
+控制器接口是一条在途命令的 ready/valid 协议：
+
+```text
+cmd_valid && cmd_ready       接收 instr、id 和 vs1/vs2/vd
+result_valid                 结果保持有效，直到 result_ready
+result_valid && result_ready 写回 vd，并释放控制器
+cmd_kill                     在执行或结果等待阶段取消当前命令，不写回
+load_valid && load_ready     用 byte mask 装载 VRF；与 command 同周期时 load 优先
+```
+
+当前 `VLEN=128`（16 个 INT8 lane），`result_data` 是 ALU 结果；结果接口的
+`result_id/result_vd` 分别用于上层 scheduler 做事务匹配和提交目的寄存器。
+该 controller 尚未连接 CV-X-IF 的 issue/result interface、L2 cache、DMA 或
+中断路径，这些属于后续集成层工作。
 
 ## 仿真
 
@@ -92,6 +124,18 @@ make sim
 
 ```sh
 make npc-sim
+```
+
+运行向量指令控制器闭环仿真：
+
+```sh
+make OBJ_DIR=/tmp/vpu_obj_vector vector-sim
+```
+
+预期最后一行：
+
+```text
+PASS: vector instruction fields, controller protocol and VRF integration completed
 ```
 
 预期输出：
