@@ -32,87 +32,6 @@ module vpu_basic #(
   logic committed_q;
   logic issue_supported;
 
-  function automatic logic [X_RFW_WIDTH-1:0] dot8(
-      input logic [X_RFR_WIDTH-1:0] a,
-      input logic [X_RFR_WIDTH-1:0] b);
-    logic signed [7:0] a0, a1, a2, a3;
-    logic signed [7:0] b0, b1, b2, b3;
-    logic signed [15:0] p0, p1, p2, p3;
-    logic signed [17:0] e0, e1, e2, e3;
-    logic signed [17:0] sum;
-    begin
-      a0 = a[7:0];   a1 = a[15:8];  a2 = a[23:16]; a3 = a[31:24];
-      b0 = b[7:0];   b1 = b[15:8];  b2 = b[23:16]; b3 = b[31:24];
-      p0 = a0 * b0;
-      p1 = a1 * b1;
-      p2 = a2 * b2;
-      p3 = a3 * b3;
-      e0 = {{2{p0[15]}}, p0};
-      e1 = {{2{p1[15]}}, p1};
-      e2 = {{2{p2[15]}}, p2};
-      e3 = {{2{p3[15]}}, p3};
-      sum = e0 + e1 + e2 + e3;
-      dot8 = {{(X_RFW_WIDTH-18){sum[17]}}, sum};
-    end
-  endfunction
-
-  function automatic logic [X_RFW_WIDTH-1:0] add8(
-      input logic [X_RFR_WIDTH-1:0] a,
-      input logic [X_RFR_WIDTH-1:0] b);
-    logic [7:0] c0, c1, c2, c3;
-    begin
-      // Each lane is independent; overflow wraps within 8 bits.
-      c0 = a[7:0]   + b[7:0];
-      c1 = a[15:8]  + b[15:8];
-      c2 = a[23:16] + b[23:16];
-      c3 = a[31:24] + b[31:24];
-      add8 = '0;
-      add8[7:0]   = c0;
-      add8[15:8]  = c1;
-      add8[23:16] = c2;
-      add8[31:24] = c3;
-    end
-  endfunction
-
-  function automatic logic [X_RFW_WIDTH-1:0] max8(
-      input logic [X_RFR_WIDTH-1:0] a,
-      input logic [X_RFR_WIDTH-1:0] b);
-    logic signed [7:0] a0, a1, a2, a3;
-    logic signed [7:0] b0, b1, b2, b3;
-    logic signed [7:0] c0, c1, c2, c3;
-    begin
-      a0 = a[7:0];   a1 = a[15:8];  a2 = a[23:16]; a3 = a[31:24];
-      b0 = b[7:0];   b1 = b[15:8];  b2 = b[23:16]; b3 = b[31:24];
-      c0 = (a0 > b0) ? a0 : b0;
-      c1 = (a1 > b1) ? a1 : b1;
-      c2 = (a2 > b2) ? a2 : b2;
-      c3 = (a3 > b3) ? a3 : b3;
-      max8 = '0;
-      max8[7:0]   = c0;
-      max8[15:8]  = c1;
-      max8[23:16] = c2;
-      max8[31:24] = c3;
-    end
-  endfunction
-
-  function automatic logic [X_RFW_WIDTH-1:0] relu8(
-      input logic [X_RFR_WIDTH-1:0] a);
-    logic signed [7:0] a0, a1, a2, a3;
-    logic signed [7:0] c0, c1, c2, c3;
-    begin
-      a0 = a[7:0];   a1 = a[15:8];  a2 = a[23:16]; a3 = a[31:24];
-      c0 = (a0 > 0) ? a0 : 0;
-      c1 = (a1 > 0) ? a1 : 0;
-      c2 = (a2 > 0) ? a2 : 0;
-      c3 = (a3 > 0) ? a3 : 0;
-      relu8 = '0;
-      relu8[7:0]   = c0;
-      relu8[15:8]  = c1;
-      relu8[23:16] = c2;
-      relu8[31:24] = c3;
-    end
-  endfunction
-
   always_comb begin
     issue_supported = is_vpu_instruction(xif.issue_req.instr);
 
@@ -150,6 +69,18 @@ module vpu_basic #(
                        (xif.register.hartid == hartid_q) &&
                        xif.register.rs_valid[0] &&
                        ((op_q == VPU_OP_RELU8) || xif.register.rs_valid[1]);
+
+  logic [X_RFR_WIDTH-1:0] compute_a, compute_b;
+  logic [X_RFW_WIDTH-1:0] compute_result;
+  assign compute_a = register_fire ? xif.register.rs[0] : rs1_q;
+  assign compute_b = register_fire ? xif.register.rs[1] : rs2_q;
+
+  vpu_compute #(
+    .DATA_WIDTH(X_RFR_WIDTH),
+    .RESULT_WIDTH(X_RFW_WIDTH)
+  ) u_compute (
+    .op(op_q), .a(compute_a), .b(compute_b), .result(compute_result)
+  );
   wire commit_fire = xif.commit_valid &&
                      (xif.commit.id == id_q) &&
                      (xif.commit.hartid == hartid_q);
@@ -199,15 +130,7 @@ module vpu_basic #(
             rs1_q <= xif.register.rs[0];
             rs2_q <= xif.register.rs[1];
             if (committed_q || (commit_fire && !xif.commit.commit_kill)) begin
-              case (op_q)
-                VPU_OP_ADD: result_q <= xif.register.rs[0] + xif.register.rs[1];
-                VPU_OP_XOR: result_q <= xif.register.rs[0] ^ xif.register.rs[1];
-                VPU_OP_DOT8: result_q <= dot8(xif.register.rs[0], xif.register.rs[1]);
-                VPU_OP_ADD8: result_q <= add8(xif.register.rs[0], xif.register.rs[1]);
-                VPU_OP_MAX8: result_q <= max8(xif.register.rs[0], xif.register.rs[1]);
-                VPU_OP_RELU8: result_q <= relu8(xif.register.rs[0]);
-                default: result_q <= '0;
-              endcase
+              result_q <= compute_result;
               state_q <= S_RESULT;
             end else begin
               state_q <= S_WAIT_COMMIT;
@@ -223,15 +146,7 @@ module vpu_basic #(
               state_q <= S_IDLE;
             end else begin
               committed_q <= 1'b1;
-              case (op_q)
-                VPU_OP_ADD: result_q <= rs1_q + rs2_q;
-                VPU_OP_XOR: result_q <= rs1_q ^ rs2_q;
-                VPU_OP_DOT8: result_q <= dot8(rs1_q, rs2_q);
-                VPU_OP_ADD8: result_q <= add8(rs1_q, rs2_q);
-                VPU_OP_MAX8: result_q <= max8(rs1_q, rs2_q);
-                VPU_OP_RELU8: result_q <= relu8(rs1_q);
-                default: result_q <= '0;
-              endcase
+              result_q <= compute_result;
               state_q <= S_RESULT;
             end
           end

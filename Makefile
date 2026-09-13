@@ -9,17 +9,19 @@ VERILATOR_FLAGS ?=
 SOURCES := \
 	$(CURDIR)/core_v_xif.sv \
 	$(CURDIR)/vpu_pkg.sv \
+	$(CURDIR)/vpu_compute.sv \
 	$(CURDIR)/vpu_basic.sv \
 	$(CURDIR)/tb_vpu_basic.sv
 
 NPC_SOURCES := \
 	$(CURDIR)/core_v_xif.sv \
 	$(CURDIR)/vpu_pkg.sv \
+	$(CURDIR)/vpu_compute.sv \
 	$(CURDIR)/vpu_basic.sv \
 	$(CURDIR)/vpu_npc_model.sv \
 	$(CURDIR)/tb_vpu_npc_model.sv
 
-.PHONY: sim npc-sim wave build clean
+.PHONY: sim npc-sim vrf-sim wave build clean
 
 sim: build
 	$(BIN)
@@ -29,6 +31,13 @@ npc-sim:
 	CCACHE_DISABLE=1 $(VERILATOR) --binary --timing --Wall --Wno-fatal \
 		--Mdir $(OBJ_DIR)/npc --top-module tb_vpu_npc_model $(NPC_SOURCES)
 	$(OBJ_DIR)/npc/Vtb_vpu_npc_model
+
+vrf-sim:
+	mkdir -p $(OBJ_DIR)/vrf
+	CCACHE_DISABLE=1 $(VERILATOR) --binary --timing --Wall --Wno-fatal \
+		--Mdir $(OBJ_DIR)/vrf --top-module tb_vpu_vector_regfile \
+		$(CURDIR)/vpu_vector_regfile.sv $(CURDIR)/tb_vpu_vector_regfile.sv
+	$(OBJ_DIR)/vrf/Vtb_vpu_vector_regfile
 
 wave:
 	$(MAKE) sim VERILATOR_FLAGS="--trace -DTRACE"

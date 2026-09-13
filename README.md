@@ -14,10 +14,13 @@ logic [X_NUM_RS-1:0][X_RFR_WIDTH-1:0] rs;
 
 - `core_v_xif_compat.sv`：官方 `core_v_xif` 的 Verilator 兼容版本。
 - `vpu_basic.sv`：直接使用 `core_v_xif` 的最小协处理器；数据宽度从接口类型自动推导。
+- `vpu_compute.sv`：纯组合执行单元，集中实现 VADD、VXOR、VDOT8、VADD8、VMAX8、VRELU8。
+- `vpu_vector_regfile.sv`：独立的 32×128-bit 本地向量寄存器堆，双读口、单写口、byte write mask。
 - `vpu_npc_model.sv`：模拟 NPC 的指令、GPR 操作数、commit/kill 和写回握手，不修改 NPC。
 - `vpu_pkg.sv`：custom-0 指令的编码和解码。
 - `tb_vpu_basic.sv`：通过官方接口字段驱动的自检 testbench。
 - `tb_vpu_npc_model.sv`：NPC-facing 适配器的独立仿真 demo。
+- `tb_vpu_vector_regfile.sv`：向量寄存器堆的复位、双读和掩码写测试。
 - `Makefile`：Verilator 仿真和 VCD 波形。
 
 已删除原来的扁平 `vpu_basic_core.sv`，避免维护两套接口实现。
@@ -59,10 +62,28 @@ VRELU8: custom-0, funct7=0000001, funct3=101,
 
 它们是验证 CV-X-IF 通信的占位指令，不是最终向量 ISA。
 
+## 模块化边界
+
+```text
+CV-X-IF issue/register/commit/result
+                 |
+             vpu_basic
+                 |
+            vpu_compute
+
+vpu_vector_regfile
+  双读、单写、byte mask
+  （当前独立验证，待后续向量指令绑定）
+```
+
+`vpu_basic` 只负责 CV-X-IF 事务状态机；`vpu_compute` 只负责组合计算；
+`vpu_vector_regfile` 只负责本地向量寄存器存储。当前没有擅自定义 VRF 的
+load/store 指令，后续确定向量 ISA 后再连接寄存器寻址和控制逻辑。
+
 ## 仿真
 
 ```sh
-cd /home/ccy/Documents/qs/core-v-xif/vpu
+cd /home/ccy/Documents/qs/vpu
 make clean
 make sim
 ```
@@ -106,7 +127,7 @@ src/core_v_xif.sv
 兼容版本：
 
 ```text
-vpu/core_v_xif_compat.sv
+core_v_xif.sv
 ```
 
 两者不能在同一次编译中同时出现，因为都定义了同名的 `core_v_xif` interface。
