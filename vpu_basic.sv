@@ -74,6 +74,27 @@ module vpu_basic #(
     end
   endfunction
 
+  function automatic logic [X_RFW_WIDTH-1:0] max8(
+      input logic [X_RFR_WIDTH-1:0] a,
+      input logic [X_RFR_WIDTH-1:0] b);
+    logic signed [7:0] a0, a1, a2, a3;
+    logic signed [7:0] b0, b1, b2, b3;
+    logic signed [7:0] c0, c1, c2, c3;
+    begin
+      a0 = a[7:0];   a1 = a[15:8];  a2 = a[23:16]; a3 = a[31:24];
+      b0 = b[7:0];   b1 = b[15:8];  b2 = b[23:16]; b3 = b[31:24];
+      c0 = (a0 > b0) ? a0 : b0;
+      c1 = (a1 > b1) ? a1 : b1;
+      c2 = (a2 > b2) ? a2 : b2;
+      c3 = (a3 > b3) ? a3 : b3;
+      max8 = '0;
+      max8[7:0]   = c0;
+      max8[15:8]  = c1;
+      max8[23:16] = c2;
+      max8[31:24] = c3;
+    end
+  endfunction
+
   always_comb begin
     issue_supported = is_vpu_instruction(xif.issue_req.instr);
 
@@ -163,6 +184,7 @@ module vpu_basic #(
                 VPU_OP_XOR: result_q <= xif.register.rs[0] ^ xif.register.rs[1];
                 VPU_OP_DOT8: result_q <= dot8(xif.register.rs[0], xif.register.rs[1]);
                 VPU_OP_ADD8: result_q <= add8(xif.register.rs[0], xif.register.rs[1]);
+                VPU_OP_MAX8: result_q <= max8(xif.register.rs[0], xif.register.rs[1]);
                 default: result_q <= '0;
               endcase
               state_q <= S_RESULT;
@@ -185,6 +207,7 @@ module vpu_basic #(
                 VPU_OP_XOR: result_q <= rs1_q ^ rs2_q;
                 VPU_OP_DOT8: result_q <= dot8(rs1_q, rs2_q);
                 VPU_OP_ADD8: result_q <= add8(rs1_q, rs2_q);
+                VPU_OP_MAX8: result_q <= max8(rs1_q, rs2_q);
                 default: result_q <= '0;
               endcase
               state_q <= S_RESULT;

@@ -162,6 +162,11 @@ module tb_vpu_basic;
                        4'd7, 32'h01020304, 32'h01020304);
     commit_and_check(4'd7, 32'h02040608, 5'd10);
 
+    $display("[1d] VMAX8: signed four-lane INT8 maximum -> rd=x11 data=0x05037f00");
+    issue_and_register(make_vpu_rtype(VPU_FUNCT3_MAX8, 5'd11, 5'd1, 5'd2),
+                       4'd8, 32'h05fe7f80, 32'hfb038000);
+    commit_and_check(4'd8, 32'h05037f00, 5'd11);
+
     $display("[2] VXOR: result remains stable while result_ready=0");
     issue_and_register(make_vpu_rtype(VPU_FUNCT3_XOR, 5'd5, 5'd6, 5'd7),
                        4'd2, 32'h55aa00ff, 32'h0f0f3333);

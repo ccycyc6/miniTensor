@@ -79,7 +79,23 @@ module tb_vpu_npc_model;
     if (result_data !== 32'h01132435 || result_rd !== 10 || result_id !== 2 || !result_we)
       $fatal(1, "NPC model VADD8 result mismatch");
     @(posedge clk);
-    $display("PASS: NPC-facing VPU model completed VADD, VDOT8 and VADD8");
+    @(negedge clk);
+    issue_instr = make_vpu_rtype(VPU_FUNCT3_MAX8, 5'd11, 5'd1, 5'd2);
+    issue_id = 3; issue_rs1 = 32'h05fe7f80; issue_rs2 = 32'hfb038000;
+    issue_valid = 1;
+    while (!issue_ready) @(negedge clk);
+    #1;
+    if (!issue_accept) $fatal(1, "VMAX8 was not accepted");
+    @(posedge clk); @(negedge clk); issue_valid = 0;
+    repeat (4) @(negedge clk);
+    commit_valid = 1; commit_id = 3;
+    @(posedge clk); @(negedge clk); commit_valid = 0;
+    while (!result_valid) @(negedge clk);
+    #1;
+    if (result_data !== 32'h05037f00 || result_rd !== 11 || result_id !== 3 || !result_we)
+      $fatal(1, "NPC model VMAX8 result mismatch");
+    @(posedge clk);
+    $display("PASS: NPC-facing VPU model completed VADD, VDOT8, VADD8 and VMAX8");
     $finish;
   end
 endmodule
