@@ -47,7 +47,39 @@ module tb_vpu_npc_model;
         result_exc || result_exccode !== 0 || result_dbg || result_err)
       $fatal(1, "NPC model result mismatch");
     @(posedge clk);
-    $display("PASS: NPC-facing VPU model completed VADD 17 + 25 = 42");
+    @(negedge clk);
+    issue_instr = make_vpu_rtype(VPU_FUNCT3_DOT8, 5'd9, 5'd1, 5'd2);
+    issue_id = 1; issue_rs1 = 32'h7f8003fe; issue_rs2 = 32'h02fffe04;
+    issue_valid = 1;
+    while (!issue_ready) @(negedge clk);
+    #1;
+    if (!issue_accept) $fatal(1, "VDOT8 was not accepted");
+    @(posedge clk); @(negedge clk); issue_valid = 0;
+    repeat (4) @(negedge clk);
+    commit_valid = 1; commit_id = 1;
+    @(posedge clk); @(negedge clk); commit_valid = 0;
+    while (!result_valid) @(negedge clk);
+    #1;
+    if (result_data !== 368 || result_rd !== 9 || result_id !== 1 || !result_we)
+      $fatal(1, "NPC model VDOT8 result mismatch");
+    @(posedge clk);
+    @(negedge clk);
+    issue_instr = make_vpu_rtype(VPU_FUNCT3_ADD8, 5'd10, 5'd1, 5'd2);
+    issue_id = 2; issue_rs1 = 32'hff102030; issue_rs2 = 32'h02030405;
+    issue_valid = 1;
+    while (!issue_ready) @(negedge clk);
+    #1;
+    if (!issue_accept) $fatal(1, "VADD8 was not accepted");
+    @(posedge clk); @(negedge clk); issue_valid = 0;
+    repeat (4) @(negedge clk);
+    commit_valid = 1; commit_id = 2;
+    @(posedge clk); @(negedge clk); commit_valid = 0;
+    while (!result_valid) @(negedge clk);
+    #1;
+    if (result_data !== 32'h01132435 || result_rd !== 10 || result_id !== 2 || !result_we)
+      $fatal(1, "NPC model VADD8 result mismatch");
+    @(posedge clk);
+    $display("PASS: NPC-facing VPU model completed VADD, VDOT8 and VADD8");
     $finish;
   end
 endmodule

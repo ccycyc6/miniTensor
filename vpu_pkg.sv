@@ -12,10 +12,14 @@ package vpu_pkg;
 
   localparam logic [2:0] VPU_FUNCT3_ADD     = 3'b000;
   localparam logic [2:0] VPU_FUNCT3_XOR     = 3'b001;
+  localparam logic [2:0] VPU_FUNCT3_DOT8    = 3'b010;
+  localparam logic [2:0] VPU_FUNCT3_ADD8    = 3'b011;
 
-  localparam logic [1:0] VPU_OP_ADD         = 2'd0;
-  localparam logic [1:0] VPU_OP_XOR         = 2'd1;
-  localparam logic [1:0] VPU_OP_INVALID     = 2'd3;
+  localparam logic [2:0] VPU_OP_ADD         = 3'd0;
+  localparam logic [2:0] VPU_OP_XOR         = 3'd1;
+  localparam logic [2:0] VPU_OP_DOT8        = 3'd2;
+  localparam logic [2:0] VPU_OP_ADD8        = 3'd3;
+  localparam logic [2:0] VPU_OP_INVALID     = 3'd7;
 
   // Operand and destination fields are intentionally don't-care for decode.
   /* verilator lint_off UNUSEDSIGNAL */
@@ -24,17 +28,23 @@ package vpu_pkg;
         (instr[6:0]   == VPU_CUSTOM0_OPCODE) &&
         (instr[31:25] == VPU_FUNCT7) &&
         ((instr[14:12] == VPU_FUNCT3_ADD) ||
-         (instr[14:12] == VPU_FUNCT3_XOR));
+         (instr[14:12] == VPU_FUNCT3_XOR) ||
+         (instr[14:12] == VPU_FUNCT3_DOT8) ||
+         (instr[14:12] == VPU_FUNCT3_ADD8));
   endfunction
   /* verilator lint_on UNUSEDSIGNAL */
 
-  function automatic logic [1:0] decode_vpu_op(input logic [31:0] instr);
+  function automatic logic [2:0] decode_vpu_op(input logic [31:0] instr);
     if (!is_vpu_instruction(instr)) begin
       decode_vpu_op = VPU_OP_INVALID;
     end else if (instr[14:12] == VPU_FUNCT3_ADD) begin
       decode_vpu_op = VPU_OP_ADD;
-    end else begin
+    end else if (instr[14:12] == VPU_FUNCT3_XOR) begin
       decode_vpu_op = VPU_OP_XOR;
+    end else if (instr[14:12] == VPU_FUNCT3_DOT8) begin
+      decode_vpu_op = VPU_OP_DOT8;
+    end else begin
+      decode_vpu_op = VPU_OP_ADD8;
     end
   endfunction
 

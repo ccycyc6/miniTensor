@@ -15,7 +15,7 @@ logic [X_NUM_RS-1:0][X_RFR_WIDTH-1:0] rs;
 - `core_v_xif_compat.sv`：官方 `core_v_xif` 的 Verilator 兼容版本。
 - `vpu_basic.sv`：直接使用 `core_v_xif` 的最小协处理器；数据宽度从接口类型自动推导。
 - `vpu_npc_model.sv`：模拟 NPC 的指令、GPR 操作数、commit/kill 和写回握手，不修改 NPC。
-- `vpu_pkg.sv`：两个 custom-0 演示指令的编码和解码。
+- `vpu_pkg.sv`：custom-0 指令的编码和解码。
 - `tb_vpu_basic.sv`：通过官方接口字段驱动的自检 testbench。
 - `tb_vpu_npc_model.sv`：NPC-facing 适配器的独立仿真 demo。
 - `Makefile`：Verilator 仿真和 VCD 波形。
@@ -46,6 +46,11 @@ memory、memory-result、中断、GEMM 和 L2 master 均未实现。
 ```text
 VADD: custom-0, funct7=0000001, funct3=000, rd = rs1 + rs2
 VXOR: custom-0, funct7=0000001, funct3=001, rd = rs1 ^ rs2
+VDOT8: custom-0, funct7=0000001, funct3=010,
+       rd = signed(rs1[7:0])*signed(rs2[7:0]) + ... +
+            signed(rs1[31:24])*signed(rs2[31:24])
+VADD8: custom-0, funct7=0000001, funct3=011,
+       four independent 8-bit lane additions, wrapping at 8 bits
 ```
 
 它们是验证 CV-X-IF 通信的占位指令，不是最终向量 ISA。
@@ -68,6 +73,8 @@ make npc-sim
 
 ```text
 [1] VADD: rs1=17 rs2=25 -> rd=x3 data=42
+[1b] VDOT8: signed four-lane INT8 dot product -> rd=x9 data=368
+[1c] VADD8: four independent 8-bit lanes with wraparound -> rd=x10 data=0x02040608
 [2] VXOR: result remains stable while result_ready=0
 [3] Standard ADD is rejected by the VPU
 [4] A killed VADD produces no result

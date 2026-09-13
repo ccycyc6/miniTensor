@@ -152,6 +152,16 @@ module tb_vpu_basic;
                        4'd1, 32'd17, 32'd25);
     commit_and_check(4'd1, 32'd42, 5'd3);
 
+    $display("[1b] VDOT8: signed four-lane INT8 dot product -> rd=x9 data=368");
+    issue_and_register(make_vpu_rtype(VPU_FUNCT3_DOT8, 5'd9, 5'd1, 5'd2),
+                       4'd6, 32'h7f8003fe, 32'h02fffe04);
+    commit_and_check(4'd6, 32'd368, 5'd9);
+
+    $display("[1c] VADD8: four independent 8-bit lanes with wraparound -> rd=x10 data=0x02040608");
+    issue_and_register(make_vpu_rtype(VPU_FUNCT3_ADD8, 5'd10, 5'd1, 5'd2),
+                       4'd7, 32'h01020304, 32'h01020304);
+    commit_and_check(4'd7, 32'h02040608, 5'd10);
+
     $display("[2] VXOR: result remains stable while result_ready=0");
     issue_and_register(make_vpu_rtype(VPU_FUNCT3_XOR, 5'd5, 5'd6, 5'd7),
                        4'd2, 32'h55aa00ff, 32'h0f0f3333);
