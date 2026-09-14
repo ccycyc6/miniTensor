@@ -45,6 +45,8 @@ Unified_Buffer/
   tb_unified_buffer.sv      同步读与 byte mask 写仿真
 VPU-L2_Master/               预留
   DMA/
+    vpu_dma.sv               单 outstanding read 的 Tile DMA
+    tb_vpu_dma.sv            DMA 到 Unified Buffer 端到端仿真
   Address_Generator/
   AXI/
     TileLink/
@@ -196,6 +198,16 @@ make ub-sim
 ```text
 PASS: unified buffer synchronous read and byte-mask writes completed
 ```
+
+运行独立 DMA 到 Unified Buffer 仿真：
+
+```sh
+make dma-sim
+```
+
+DMA 每次只允许一个未完成的 128-bit memory read，收到响应后写入 Unified Buffer，
+源地址按 16 字节递增、目标地址按一行递增。当前使用 ready/valid memory model，
+尚未接入 AXI、TileLink 或 OBI。
 
 生成波形：
 

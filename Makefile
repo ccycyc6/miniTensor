@@ -32,7 +32,12 @@ UB_SOURCES := \
 	$(CURDIR)/Unified_Buffer/unified_buffer.sv \
 	$(CURDIR)/Unified_Buffer/tb_unified_buffer.sv
 
-.PHONY: sim npc-sim vrf-sim vector-sim ub-sim wave build clean
+DMA_SOURCES := \
+	$(CURDIR)/Unified_Buffer/unified_buffer.sv \
+	$(CURDIR)/VPU-L2_Master/DMA/vpu_dma.sv \
+	$(CURDIR)/VPU-L2_Master/DMA/tb_vpu_dma.sv
+
+.PHONY: sim npc-sim vrf-sim vector-sim ub-sim dma-sim wave build clean
 
 sim: build
 	$(BIN)
@@ -63,6 +68,12 @@ ub-sim:
 	CCACHE_DISABLE=1 $(VERILATOR) --binary --timing --Wall --Wno-fatal \
 		--Mdir $(OBJ_DIR)/ub --top-module tb_unified_buffer $(UB_SOURCES)
 	$(OBJ_DIR)/ub/Vtb_unified_buffer
+
+dma-sim:
+	mkdir -p $(OBJ_DIR)/dma
+	CCACHE_DISABLE=1 $(VERILATOR) --binary --timing --Wall --Wno-fatal \
+		--Mdir $(OBJ_DIR)/dma --top-module tb_vpu_dma $(DMA_SOURCES)
+	$(OBJ_DIR)/dma/Vtb_vpu_dma
 
 wave:
 	$(MAKE) sim VERILATOR_FLAGS="--trace -DTRACE"
