@@ -7,26 +7,26 @@ WAVE_FILE  := $(CURDIR)/vpu_basic.vcd
 VERILATOR_FLAGS ?=
 
 SOURCES := \
-	$(CURDIR)/core_v_xif.sv \
-	$(CURDIR)/vpu_pkg.sv \
-	$(CURDIR)/vpu_compute.sv \
-	$(CURDIR)/vpu_basic.sv \
-	$(CURDIR)/tb_vpu_basic.sv
+	$(CURDIR)/interface/core_v_xif.sv \
+	$(CURDIR)/common/vpu_pkg.sv \
+	$(CURDIR)/scalar/vpu_compute.sv \
+	$(CURDIR)/scalar/vpu_basic.sv \
+	$(CURDIR)/tb/tb_vpu_basic.sv
 
 NPC_SOURCES := \
-	$(CURDIR)/core_v_xif.sv \
-	$(CURDIR)/vpu_pkg.sv \
-	$(CURDIR)/vpu_compute.sv \
-	$(CURDIR)/vpu_basic.sv \
-	$(CURDIR)/vpu_npc_model.sv \
-	$(CURDIR)/tb_vpu_npc_model.sv
+	$(CURDIR)/interface/core_v_xif.sv \
+	$(CURDIR)/common/vpu_pkg.sv \
+	$(CURDIR)/scalar/vpu_compute.sv \
+	$(CURDIR)/scalar/vpu_basic.sv \
+	$(CURDIR)/npc/vpu_npc_model.sv \
+	$(CURDIR)/tb/tb_vpu_npc_model.sv
 
 VECTOR_SOURCES := \
-	$(CURDIR)/vpu_pkg.sv \
-	$(CURDIR)/vpu_vector_regfile.sv \
-	$(CURDIR)/vpu_vector_alu.sv \
-	$(CURDIR)/vpu_vector_controller.sv \
-	$(CURDIR)/tb_vpu_vector_controller.sv
+	$(CURDIR)/common/vpu_pkg.sv \
+	$(CURDIR)/vector/vpu_vector_regfile.sv \
+	$(CURDIR)/vector/vpu_vector_alu.sv \
+	$(CURDIR)/vector/vpu_vector_controller.sv \
+	$(CURDIR)/tb/tb_vpu_vector_controller.sv
 
 .PHONY: sim npc-sim vrf-sim vector-sim wave build clean
 
@@ -43,7 +43,7 @@ vrf-sim:
 	mkdir -p $(OBJ_DIR)/vrf
 	CCACHE_DISABLE=1 $(VERILATOR) --binary --timing --Wall --Wno-fatal \
 		--Mdir $(OBJ_DIR)/vrf --top-module tb_vpu_vector_regfile \
-		$(CURDIR)/vpu_vector_regfile.sv $(CURDIR)/tb_vpu_vector_regfile.sv
+		$(CURDIR)/vector/vpu_vector_regfile.sv $(CURDIR)/tb/tb_vpu_vector_regfile.sv
 	$(OBJ_DIR)/vrf/Vtb_vpu_vector_regfile
 
 vector-sim:

@@ -10,21 +10,20 @@ logic [X_NUM_RS-1:0][X_RFR_WIDTH-1:0] rs;
 接口名称、字段名称、字段宽度、握手规则和 modport 均保持与
 `../src/core_v_xif.sv` 一致。官方源文件未被修改。
 
-## 文件
+## 目录
 
-- `core_v_xif_compat.sv`：官方 `core_v_xif` 的 Verilator 兼容版本。
-- `vpu_basic.sv`：直接使用 `core_v_xif` 的最小协处理器；数据宽度从接口类型自动推导。
-- `vpu_compute.sv`：纯组合执行单元，集中实现 VADD、VXOR、VDOT8、VADD8、VMAX8、VRELU8。
-- `vpu_vector_regfile.sv`：独立的 32×128-bit 本地向量寄存器堆，双读口、单写口、byte write mask。
-- `vpu_vector_alu.sv`：16-lane INT8 向量 ALU，支持 VADD8、VMAX8、VRELU8。
-- `vpu_vector_controller.sv`：按向量指令字段解码，调度 VRF 双读和 ALU，按结果握手写回 VRF。
-- `vpu_npc_model.sv`：模拟 NPC 的指令、GPR 操作数、commit/kill 和写回握手，不修改 NPC。
-- `vpu_pkg.sv`：custom-0 指令的编码和解码。
-- `tb_vpu_basic.sv`：通过官方接口字段驱动的自检 testbench。
-- `tb_vpu_npc_model.sv`：NPC-facing 适配器的独立仿真 demo。
-- `tb_vpu_vector_regfile.sv`：向量寄存器堆的复位、双读和掩码写测试。
-- `tb_vpu_vector_controller.sv`：向量字段、控制握手和 VRF 写回闭环测试。
-- `Makefile`：Verilator 仿真和 VCD 波形。
+```text
+interface/  CV-X-IF 接口定义
+common/     指令编码、解码和公共定义
+scalar/     标量 VPU 控制器和执行单元
+vector/     向量寄存器堆、向量 ALU 和向量控制器
+npc/        NPC-facing 适配模型
+tb/         各模块 testbench
+```
+
+主要文件分别位于上述目录中；文件名和模块名保持不变。
+
+根目录的 `Makefile` 负责 Verilator 仿真和 VCD 波形。
 
 已删除原来的扁平 `vpu_basic_core.sv`，避免维护两套接口实现。
 
@@ -171,13 +170,13 @@ src/core_v_xif.sv
 兼容版本：
 
 ```text
-core_v_xif.sv
+interface/core_v_xif.sv
 ```
 
 两者不能在同一次编译中同时出现，因为都定义了同名的 `core_v_xif` interface。
 
 当使用 Questa、VCS 等支持官方写法的工具时，可以把
-`core_v_xif_compat.sv` 替换为 `../src/core_v_xif.sv`。VPU 侧的字段连接不需要改变：
+`interface/core_v_xif.sv` 替换为 `../src/core_v_xif.sv`。VPU 侧的字段连接不需要改变：
 
 ```systemverilog
 xif.issue_req.instr
@@ -194,7 +193,7 @@ xif.result_ready
 
 ## 与 Mundus/NPC 的关系
 
-`vpu_npc_model.sv` 只用于在 VPU 工程内复现 NPC 的时序，不会修改
+`npc/vpu_npc_model.sv` 只用于在 VPU 工程内复现 NPC 的时序，不会修改
 `Mundus/npc`。真实接入时，NPC 需要实现 CPU 一侧的 CV-X-IF 驱动：
 
 1. `IDU` 识别 `custom-0`，驱动 `issue_valid/issue_req`。
