@@ -13,12 +13,40 @@ logic [X_NUM_RS-1:0][X_RFR_WIDTH-1:0] rs;
 ## 目录
 
 ```text
-interface/  CV-X-IF 接口定义
-common/     指令编码、解码和公共定义
-scalar/     标量 VPU 控制器和执行单元
-vector/     向量寄存器堆、向量 ALU 和向量控制器
-npc/        NPC-facing 适配模型
-tb/         各模块 testbench
+CV-X-IF_Adapter/
+  core_v_xif.sv             CV-X-IF 接口定义
+  vpu_npc_model.sv          NPC-facing 适配模型
+  tb_vpu_basic.sv           标量 CV-X-IF testbench
+  tb_vpu_npc_model.sv       NPC-facing testbench
+Command_Queue/              预留
+Controller/
+  vpu_pkg.sv                指令编码、解码和公共定义
+  vpu_basic.sv              标量 VPU 控制器
+  vpu_vector_controller.sv  向量指令控制器
+  tb_vpu_vector_controller.sv
+TensorCore/                 预留
+  INT8_GEMM/
+  Systolic Array/
+  INT32_Accumulator/
+  Bias/
+    Requant/
+      ReLU/
+Vector_Processing_Unit/
+  vpu_vector_regfile.sv     向量寄存器堆
+  Vector_ALU/
+    vpu_compute.sv          标量打包执行单元
+    vpu_vector_alu.sv       16-lane INT8 向量 ALU
+    tb_vpu_vector_regfile.sv
+  Quantization/             预留
+  Activation/
+    Pooling/                预留
+Unified_Buffer/              预留
+VPU-L2_Master/               预留
+  DMA/
+  Address_Generator/
+  AXI/
+    TileLink/
+      OBI_Adapter/
 ```
 
 主要文件分别位于上述目录中；文件名和模块名保持不变。
@@ -79,8 +107,10 @@ vector instruction controller
   load_valid/load_ready -> VRF 初始化（与 command 互斥）
 ```
 
-`vpu_basic` 只负责 CV-X-IF 事务状态机；`vpu_compute` 只负责组合计算；
-`vpu_vector_regfile` 只负责本地向量寄存器存储。`vpu_vector_controller` 负责
+`Controller/vpu_basic.sv` 只负责 CV-X-IF 事务状态机；
+`Vector_Processing_Unit/Vector_ALU/vpu_compute.sv` 只负责组合计算；
+`Vector_Processing_Unit/vpu_vector_regfile.sv` 只负责本地向量寄存器存储。
+`Controller/vpu_vector_controller.sv` 负责
 向量指令的字段解析、VRF 读端口连接、ALU 调度和结果写回。
 
 ## 向量指令字段与控制协议
@@ -170,13 +200,13 @@ src/core_v_xif.sv
 兼容版本：
 
 ```text
-interface/core_v_xif.sv
+CV-X-IF_Adapter/core_v_xif.sv
 ```
 
 两者不能在同一次编译中同时出现，因为都定义了同名的 `core_v_xif` interface。
 
 当使用 Questa、VCS 等支持官方写法的工具时，可以把
-`interface/core_v_xif.sv` 替换为 `../src/core_v_xif.sv`。VPU 侧的字段连接不需要改变：
+`CV-X-IF_Adapter/core_v_xif.sv` 替换为 `../src/core_v_xif.sv`。VPU 侧的字段连接不需要改变：
 
 ```systemverilog
 xif.issue_req.instr
@@ -193,7 +223,7 @@ xif.result_ready
 
 ## 与 Mundus/NPC 的关系
 
-`npc/vpu_npc_model.sv` 只用于在 VPU 工程内复现 NPC 的时序，不会修改
+`CV-X-IF_Adapter/vpu_npc_model.sv` 只用于在 VPU 工程内复现 NPC 的时序，不会修改
 `Mundus/npc`。真实接入时，NPC 需要实现 CPU 一侧的 CV-X-IF 驱动：
 
 1. `IDU` 识别 `custom-0`，驱动 `issue_valid/issue_req`。
