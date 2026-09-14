@@ -40,7 +40,9 @@ Vector_Processing_Unit/
   Quantization/             预留
   Activation/
     Pooling/                预留
-Unified_Buffer/              预留
+Unified_Buffer/
+  unified_buffer.sv         4 KiB 参数化 Local SRAM
+  tb_unified_buffer.sv      同步读与 byte mask 写仿真
 VPU-L2_Master/               预留
   DMA/
   Address_Generator/
@@ -167,7 +169,7 @@ make OBJ_DIR=/tmp/vpu_obj_vector vector-sim
 PASS: vector instruction fields, controller protocol and VRF integration completed
 ```
 
-预期输出：
+`make sim` 预期输出：
 
 ```text
 [1] VADD: rs1=17 rs2=25 -> rd=x3 data=42
@@ -180,6 +182,19 @@ PASS: vector instruction fields, controller protocol and VRF integration complet
 [4] A killed VADD produces no result
 [5] Positive commit may arrive before split register operands
 PASS: official-compatible CV-X-IF VPU demo completed
+```
+
+运行独立 Unified Buffer 仿真：
+
+```sh
+make ub-sim
+```
+
+默认 Unified Buffer 为 `128-bit x 256`（4 KiB），使用单时钟同步读和逐字节
+写使能。当前只实现 Local SRAM 存储体，尚未接入 DMA、总线或计算单元。预期最后一行：
+
+```text
+PASS: unified buffer synchronous read and byte-mask writes completed
 ```
 
 生成波形：

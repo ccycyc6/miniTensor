@@ -28,7 +28,11 @@ VECTOR_SOURCES := \
 	$(CURDIR)/Controller/vpu_vector_controller.sv \
 	$(CURDIR)/Controller/tb_vpu_vector_controller.sv
 
-.PHONY: sim npc-sim vrf-sim vector-sim wave build clean
+UB_SOURCES := \
+	$(CURDIR)/Unified_Buffer/unified_buffer.sv \
+	$(CURDIR)/Unified_Buffer/tb_unified_buffer.sv
+
+.PHONY: sim npc-sim vrf-sim vector-sim ub-sim wave build clean
 
 sim: build
 	$(BIN)
@@ -53,6 +57,12 @@ vector-sim:
 		--Mdir $(OBJ_DIR)/vector --top-module tb_vpu_vector_controller \
 		$(VECTOR_SOURCES)
 	$(OBJ_DIR)/vector/Vtb_vpu_vector_controller
+
+ub-sim:
+	mkdir -p $(OBJ_DIR)/ub
+	CCACHE_DISABLE=1 $(VERILATOR) --binary --timing --Wall --Wno-fatal \
+		--Mdir $(OBJ_DIR)/ub --top-module tb_unified_buffer $(UB_SOURCES)
+	$(OBJ_DIR)/ub/Vtb_unified_buffer
 
 wave:
 	$(MAKE) sim VERILATOR_FLAGS="--trace -DTRACE"
