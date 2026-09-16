@@ -1,7 +1,7 @@
 /*
  * Copyright 2024 OpenHW Group
  *
- * Derived from ../src/core_v_xif.sv, licensed under the Solderpad Hardware
+ * Derived from the upstream core_v_xif.sv, licensed under the Solderpad Hardware
  * License, Version 2.0.  This file keeps the official CV-X-IF interface
  * shape and only changes x_register_t.rs to a packed representation for
  * Verilator compatibility.
