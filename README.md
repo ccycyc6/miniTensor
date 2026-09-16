@@ -1,4 +1,4 @@
-# Verilator-compatible CV-X-IF VPU and NPC-facing model
+# Verilator-compatible vector VPU
 
 本目录保留官方 CV-X-IF 的接口结构，只对官方接口中 Verilator 5.040 不支持的
 `x_register_t.rs` 作工具兼容改写：
@@ -15,13 +15,11 @@ logic [X_NUM_RS-1:0][X_RFR_WIDTH-1:0] rs;
 ```text
 CV-X-IF_Adapter/
   core_v_xif.sv             CV-X-IF 接口定义
-  vpu_npc_model.sv          NPC-facing 适配模型
-  tb_vpu_basic.sv           标量 CV-X-IF testbench
-  tb_vpu_npc_model.sv       NPC-facing testbench
+  vpu_vector_npc_adapter.sv CV-X-IF/NPC 到真实向量控制器的适配器
+  tb_vpu_vector_npc_adapter.sv
 Command_Queue/              预留
 Controller/
   vpu_pkg.sv                指令编码、解码和公共定义
-  vpu_basic.sv              标量 VPU 控制器
   vpu_vector_controller.sv  向量指令控制器
   tb_vpu_vector_controller.sv
 TensorCore/                 预留
@@ -34,7 +32,6 @@ TensorCore/                 预留
 Vector_Processing_Unit/
   vpu_vector_regfile.sv     向量寄存器堆
   Vector_ALU/
-    vpu_compute.sv          标量打包执行单元
     vpu_vector_alu.sv       16-lane INT8 向量 ALU
     tb_vpu_vector_regfile.sv
   Quantization/             预留
@@ -43,21 +40,13 @@ Vector_Processing_Unit/
 Unified_Buffer/
   unified_buffer.sv         4 KiB 参数化 Local SRAM
   tb_unified_buffer.sv      同步读与 byte mask 写仿真
-VPU-L2_Master/               预留
+VPU-Uncached-Master/               预留
   DMA/
     vpu_dma.sv               单 outstanding read 的 Tile DMA
     tb_vpu_dma.sv            DMA 到 Unified Buffer 端到端仿真
-  Address_Generator/
-  AXI/
-    TileLink/
-      OBI_Adapter/
 ```
 
-主要文件分别位于上述目录中；文件名和模块名保持不变。
-
 根目录的 `Makefile` 负责 Verilator 仿真和 VCD 波形。
-
-已删除原来的扁平 `vpu_basic_core.sv`，避免维护两套接口实现。
 
 ## 配置
 
@@ -66,8 +55,8 @@ testbench 使用：
 ```text
 X_NUM_RS               = 2
 X_ID_WIDTH             = 4
-X_RFR_WIDTH            = 32
-X_RFW_WIDTH            = 32
+X_RFR_WIDTH            = 128
+X_RFW_WIDTH            = 128
 X_HARTID_WIDTH         = 1
 X_DUALREAD             = 0
 X_DUALWRITE            = 0
@@ -75,8 +64,8 @@ X_ISSUE_REGISTER_SPLIT = 1
 X_MEM_WIDTH            = 32
 ```
 
-VPU 当前只实现 issue、split register、commit/kill 和 result；compressed、
-memory、memory-result、中断、GEMM 和 L2 master 均未实现。
+VPU 当前实现 issue、split register、commit/kill、VRF 装载和 result；compressed、
+memory、memory-result、中断和 GEMM 尚未实现。
 
 ## 演示指令
 
@@ -94,16 +83,18 @@ VRELU8: custom-0, funct7=0000001, funct3=101,
         signed INT8 ReLU per lane: max(signed(lane), 0); rs2 is unused
 ```
 
-它们是验证 CV-X-IF 通信的占位指令，不是最终向量 ISA。
+这些是当前向量控制器支持的 custom-0 指令编码。
 
 ## 模块化边界
 
 ```text
 CV-X-IF issue/register/commit/result
                  |
-             vpu_basic
+       vpu_vector_npc_adapter
                  |
-            vpu_compute
+       vpu_vector_controller
+                 |
+          VRF -> vector ALU
 
 vector instruction controller
   cmd_valid/cmd_ready -> VRF 双读 -> vector ALU
@@ -111,11 +102,10 @@ vector instruction controller
   load_valid/load_ready -> VRF 初始化（与 command 互斥）
 ```
 
-`Controller/vpu_basic.sv` 只负责 CV-X-IF 事务状态机；
-`Vector_Processing_Unit/Vector_ALU/vpu_compute.sv` 只负责组合计算；
-`Vector_Processing_Unit/vpu_vector_regfile.sv` 只负责本地向量寄存器存储。
-`Controller/vpu_vector_controller.sv` 负责
-向量指令的字段解析、VRF 读端口连接、ALU 调度和结果写回。
+`CV-X-IF_Adapter/vpu_vector_npc_adapter.sv` 负责 CV-X-IF/NPC 事务桥接，
+并将两个 128-bit 操作数装入真实的向量寄存器堆。
+`Controller/vpu_vector_controller.sv` 负责指令字段解析、VRF 双读、ALU 调度和结果写回。
+`Vector_Processing_Unit/vpu_vector_regfile.sv` 负责本地向量寄存器存储。
 
 ## 向量指令字段与控制协议
 
@@ -142,18 +132,18 @@ load_valid && load_ready     用 byte mask 装载 VRF；与 command 同周期时
 
 当前 `VLEN=128`（16 个 INT8 lane），`result_data` 是 ALU 结果；结果接口的
 `result_id/result_vd` 分别用于上层 scheduler 做事务匹配和提交目的寄存器。
-该 controller 尚未连接 CV-X-IF 的 issue/result interface、L2 cache、DMA 或
-中断路径，这些属于后续集成层工作。
+CV-X-IF/NPC 适配器已经连接 issue/register/commit/result 时序；L2 cache、DMA
+和中断路径仍属于后续集成层工作。
 
 ## 仿真
 
 ```sh
-cd /home/ccy/Documents/qs/vpu
+cd /home/ccy/Documents/qs/miniTensor
 make clean
 make sim
 ```
 
-模拟 NPC 侧接口，不编译 NPC：
+运行 CV-X-IF/NPC 适配器与真实向量控制器的闭环仿真：
 
 ```sh
 make npc-sim
@@ -171,19 +161,10 @@ make OBJ_DIR=/tmp/vpu_obj_vector vector-sim
 PASS: vector instruction fields, controller protocol and VRF integration completed
 ```
 
-`make sim` 预期输出：
+`make sim` 默认运行真实向量控制器，预期最后一行：
 
 ```text
-[1] VADD: rs1=17 rs2=25 -> rd=x3 data=42
-[1b] VDOT8: signed four-lane INT8 dot product -> rd=x9 data=368
-[1c] VADD8: four independent 8-bit lanes with wraparound -> rd=x10 data=0x02040608
-[1d] VMAX8: signed four-lane INT8 maximum -> rd=x11 data=0x05037f00
-[1e] VRELU8: signed four-lane INT8 ReLU -> rd=x12 data=0x7f050000
-[2] VXOR: result remains stable while result_ready=0
-[3] Standard ADD is rejected by the VPU
-[4] A killed VADD produces no result
-[5] Positive commit may arrive before split register operands
-PASS: official-compatible CV-X-IF VPU demo completed
+PASS: vector instruction fields, controller protocol and VRF integration completed
 ```
 
 运行独立 Unified Buffer 仿真：
@@ -213,7 +194,7 @@ DMA 每次只允许一个未完成的 128-bit memory read，收到响应后写�
 
 ```sh
 make wave
-gtkwave vpu_basic.vcd
+gtkwave vector_controller.vcd
 ```
 
 ## 与官方版本的关系
@@ -250,8 +231,8 @@ xif.result_ready
 
 ## 与 Mundus/NPC 的关系
 
-`CV-X-IF_Adapter/vpu_npc_model.sv` 只用于在 VPU 工程内复现 NPC 的时序，不会修改
-`Mundus/npc`。真实接入时，NPC 需要实现 CPU 一侧的 CV-X-IF 驱动：
+`CV-X-IF_Adapter/vpu_vector_npc_adapter.sv` 将 NPC 侧信号接入真实向量控制器，
+不会修改 `Mundus/npc`。真实接入时，NPC 需要实现 CPU 一侧的 CV-X-IF 驱动：
 
 1. `IDU` 识别 `custom-0`，驱动 `issue_valid/issue_req`。
 2. `ISU` 使用最终旁路后的 rs1/rs2 值驱动 `register_valid/register`。

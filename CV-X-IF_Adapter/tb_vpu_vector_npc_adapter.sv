@@ -1,19 +1,20 @@
 `timescale 1ns/1ps
 
-module tb_vpu_npc_model;
+module tb_vpu_vector_npc_adapter;
   import vpu_pkg::*;
   logic clk = 0, rst = 1;
   always #5 clk = ~clk;
   logic issue_valid, issue_ready, issue_accept;
-  logic [31:0] issue_instr, issue_rs1, issue_rs2;
+  logic [31:0] issue_instr;
+  logic [127:0] issue_rs1, issue_rs2;
   logic [3:0] issue_id, commit_id, result_id;
   logic commit_valid, commit_kill, result_valid, result_ready;
-  logic [31:0] result_data;
+  logic [127:0] result_data;
   logic [4:0] result_rd;
   logic result_we, result_exc, result_dbg, result_err, result_hartid;
   logic [5:0] result_exccode;
 
-  vpu_npc_model dut (
+  vpu_vector_npc_adapter dut (
     .clk, .rst,
     .npc_issue_valid(issue_valid), .npc_issue_ready(issue_ready),
     .npc_issue_instr(issue_instr), .npc_issue_id(issue_id),
@@ -28,11 +29,13 @@ module tb_vpu_npc_model;
   );
 
   initial begin
-    issue_valid = 0; issue_instr = 0; issue_id = 0; issue_rs1 = 17; issue_rs2 = 25;
+    issue_valid = 0; issue_instr = 0; issue_id = 0;
+    issue_rs1 = 128'h7f05ff80_7d03fd80_7c02fc80_7b01fb80;
+    issue_rs2 = 128'h01010101_01010101_01010101_01010101;
     commit_valid = 0; commit_id = 0; commit_kill = 0; result_ready = 0;
     repeat (2) @(posedge clk); rst = 0;
     @(negedge clk);
-    issue_instr = make_vpu_rtype(VPU_FUNCT3_ADD, 5'd3, 5'd1, 5'd2);
+    issue_instr = make_vector_rtype(VPU_VECTOR_FUNCT3_RELU8, 5'd3, 5'd1, 5'd2);
     issue_id = 0; issue_valid = 1;
     while (!issue_ready) @(negedge clk);
     #1;
@@ -43,13 +46,14 @@ module tb_vpu_npc_model;
     @(posedge clk); @(negedge clk); commit_valid = 0; result_ready = 1;
     while (!result_valid) @(negedge clk);
     #1;
-    if (result_data !== 42 || result_rd !== 3 || result_id !== 0 || !result_we ||
+    if (result_data !== 128'h7f050000_7d030000_7c020000_7b010000 ||
+        result_rd !== 3 || result_id !== 0 || !result_we ||
         result_exc || result_exccode !== 0 || result_dbg || result_err)
       $fatal(1, "NPC model result mismatch");
     @(posedge clk);
     @(negedge clk);
-    issue_instr = make_vpu_rtype(VPU_FUNCT3_DOT8, 5'd9, 5'd1, 5'd2);
-    issue_id = 1; issue_rs1 = 32'h7f8003fe; issue_rs2 = 32'h02fffe04;
+    issue_instr = make_vector_rtype(VPU_VECTOR_FUNCT3_ADD8, 5'd4, 5'd1, 5'd2);
+    issue_id = 1;
     issue_valid = 1;
     while (!issue_ready) @(negedge clk);
     #1;
@@ -60,12 +64,13 @@ module tb_vpu_npc_model;
     @(posedge clk); @(negedge clk); commit_valid = 0;
     while (!result_valid) @(negedge clk);
     #1;
-    if (result_data !== 368 || result_rd !== 9 || result_id !== 1 || !result_we)
-      $fatal(1, "NPC model VDOT8 result mismatch");
+    if (result_data !== 128'h80060081_7e04fe81_7d03fd81_7c02fc81 ||
+        result_rd !== 4 || result_id !== 1 || !result_we)
+      $fatal(1, "NPC vector VADD8 result mismatch");
     @(posedge clk);
     @(negedge clk);
-    issue_instr = make_vpu_rtype(VPU_FUNCT3_ADD8, 5'd10, 5'd1, 5'd2);
-    issue_id = 2; issue_rs1 = 32'hff102030; issue_rs2 = 32'h02030405;
+    issue_instr = make_vector_rtype(VPU_VECTOR_FUNCT3_MAX8, 5'd5, 5'd1, 5'd2);
+    issue_id = 2;
     issue_valid = 1;
     while (!issue_ready) @(negedge clk);
     #1;
@@ -76,12 +81,13 @@ module tb_vpu_npc_model;
     @(posedge clk); @(negedge clk); commit_valid = 0;
     while (!result_valid) @(negedge clk);
     #1;
-    if (result_data !== 32'h01132435 || result_rd !== 10 || result_id !== 2 || !result_we)
-      $fatal(1, "NPC model VADD8 result mismatch");
+    if (result_data !== 128'h7f050101_7d030101_7c020101_7b010101 ||
+        result_rd !== 5 || result_id !== 2 || !result_we)
+      $fatal(1, "NPC vector VMAX8 result mismatch");
     @(posedge clk);
     @(negedge clk);
-    issue_instr = make_vpu_rtype(VPU_FUNCT3_MAX8, 5'd11, 5'd1, 5'd2);
-    issue_id = 3; issue_rs1 = 32'h05fe7f80; issue_rs2 = 32'hfb038000;
+    issue_instr = make_vector_rtype(VPU_VECTOR_FUNCT3_RELU8, 5'd6, 5'd1, 5'd2);
+    issue_id = 3;
     issue_valid = 1;
     while (!issue_ready) @(negedge clk);
     #1;
@@ -92,26 +98,22 @@ module tb_vpu_npc_model;
     @(posedge clk); @(negedge clk); commit_valid = 0;
     while (!result_valid) @(negedge clk);
     #1;
-    if (result_data !== 32'h05037f00 || result_rd !== 11 || result_id !== 3 || !result_we)
-      $fatal(1, "NPC model VMAX8 result mismatch");
+    if (result_data !== 128'h7f050000_7d030000_7c020000_7b010000 ||
+        result_rd !== 6 || result_id !== 3 || !result_we)
+      $fatal(1, "NPC vector VRELU8 result mismatch");
     @(posedge clk);
     @(negedge clk);
-    issue_instr = make_vpu_rtype(VPU_FUNCT3_RELU8, 5'd12, 5'd1, 5'd0);
-    issue_id = 4; issue_rs1 = 32'h7f05ff80; issue_rs2 = 32'hdeadbeef;
+    issue_instr = 32'h00000033;
+    issue_id = 4;
     issue_valid = 1;
     while (!issue_ready) @(negedge clk);
     #1;
-    if (!issue_accept) $fatal(1, "VRELU8 was not accepted");
+    if (issue_accept) $fatal(1, "unsupported instruction was accepted");
     @(posedge clk); @(negedge clk); issue_valid = 0;
     repeat (4) @(negedge clk);
     commit_valid = 1; commit_id = 4;
     @(posedge clk); @(negedge clk); commit_valid = 0;
-    while (!result_valid) @(negedge clk);
-    #1;
-    if (result_data !== 32'h7f050000 || result_rd !== 12 || result_id !== 4 || !result_we)
-      $fatal(1, "NPC model VRELU8 result mismatch");
-    @(posedge clk);
-    $display("PASS: NPC-facing VPU model completed VADD, VDOT8, VADD8, VMAX8 and VRELU8");
+    $display("PASS: NPC-facing adapter drove the real vector controller");
     $finish;
   end
 endmodule

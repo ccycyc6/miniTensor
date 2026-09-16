@@ -1,25 +1,21 @@
 VERILATOR ?= verilator
 OBJ_DIR    := $(CURDIR)/obj_dir
-TOP        := tb_vpu_basic
+TOP        := tb_vpu_vector_controller
 BIN        := $(OBJ_DIR)/V$(TOP)
-WAVE_FILE  := $(CURDIR)/vpu_basic.vcd
+WAVE_FILE  := $(CURDIR)/vector_controller.vcd
 
 VERILATOR_FLAGS ?=
 
-SOURCES := \
-	$(CURDIR)/CV-X-IF_Adapter/core_v_xif.sv \
-	$(CURDIR)/Controller/vpu_pkg.sv \
-	$(CURDIR)/Vector_Processing_Unit/Vector_ALU/vpu_compute.sv \
-	$(CURDIR)/Controller/vpu_basic.sv \
-	$(CURDIR)/CV-X-IF_Adapter/tb_vpu_basic.sv
+SOURCES = $(VECTOR_SOURCES)
 
 NPC_SOURCES := \
 	$(CURDIR)/CV-X-IF_Adapter/core_v_xif.sv \
 	$(CURDIR)/Controller/vpu_pkg.sv \
-	$(CURDIR)/Vector_Processing_Unit/Vector_ALU/vpu_compute.sv \
-	$(CURDIR)/Controller/vpu_basic.sv \
-	$(CURDIR)/CV-X-IF_Adapter/vpu_npc_model.sv \
-	$(CURDIR)/CV-X-IF_Adapter/tb_vpu_npc_model.sv
+	$(CURDIR)/Vector_Processing_Unit/vpu_vector_regfile.sv \
+	$(CURDIR)/Vector_Processing_Unit/Vector_ALU/vpu_vector_alu.sv \
+	$(CURDIR)/Controller/vpu_vector_controller.sv \
+	$(CURDIR)/CV-X-IF_Adapter/vpu_vector_npc_adapter.sv \
+	$(CURDIR)/CV-X-IF_Adapter/tb_vpu_vector_npc_adapter.sv
 
 VECTOR_SOURCES := \
 	$(CURDIR)/Controller/vpu_pkg.sv \
@@ -34,19 +30,18 @@ UB_SOURCES := \
 
 DMA_SOURCES := \
 	$(CURDIR)/Unified_Buffer/unified_buffer.sv \
-	$(CURDIR)/VPU-L2_Master/DMA/vpu_dma.sv \
-	$(CURDIR)/VPU-L2_Master/DMA/tb_vpu_dma.sv
+	$(CURDIR)/VPU-Uncached-Master/DMA/vpu_dma.sv \
+	$(CURDIR)/VPU-Uncached-Master/DMA/tb_vpu_dma.sv
 
 .PHONY: sim npc-sim vrf-sim vector-sim ub-sim dma-sim wave build clean
 
-sim: build
-	$(BIN)
+sim: vector-sim
 
 npc-sim:
 	mkdir -p $(OBJ_DIR)/npc
 	CCACHE_DISABLE=1 $(VERILATOR) --binary --timing --Wall --Wno-fatal \
-		--Mdir $(OBJ_DIR)/npc --top-module tb_vpu_npc_model $(NPC_SOURCES)
-	$(OBJ_DIR)/npc/Vtb_vpu_npc_model
+		--Mdir $(OBJ_DIR)/npc --top-module tb_vpu_vector_npc_adapter $(NPC_SOURCES)
+	$(OBJ_DIR)/npc/Vtb_vpu_vector_npc_adapter
 
 vrf-sim:
 	mkdir -p $(OBJ_DIR)/vrf
@@ -56,12 +51,8 @@ vrf-sim:
 		$(CURDIR)/Vector_Processing_Unit/tb_vpu_vector_regfile.sv
 	$(OBJ_DIR)/vrf/Vtb_vpu_vector_regfile
 
-vector-sim:
-	mkdir -p $(OBJ_DIR)/vector
-	CCACHE_DISABLE=1 $(VERILATOR) --binary --timing --Wall --Wno-fatal \
-		--Mdir $(OBJ_DIR)/vector --top-module tb_vpu_vector_controller \
-		$(VECTOR_SOURCES)
-	$(OBJ_DIR)/vector/Vtb_vpu_vector_controller
+vector-sim: build
+	$(BIN)
 
 ub-sim:
 	mkdir -p $(OBJ_DIR)/ub

@@ -20,6 +20,13 @@ module tb_vpu_vector_controller;
     .load_valid, .load_ready, .load_addr, .load_data, .load_be
   );
 
+`ifdef TRACE
+  initial begin
+    $dumpfile("vector_controller.vcd");
+    $dumpvars(0, tb_vpu_vector_controller);
+  end
+`endif
+
   task automatic load_vector(input logic [4:0] addr, input logic [127:0] data);
     integer guard;
     begin
