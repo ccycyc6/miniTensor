@@ -18,20 +18,41 @@ DMA_SOURCES := \
 	$(CURDIR)/rtl/memory/vpu_dma.sv \
 	$(CURDIR)/tb/memory/tb_vpu_dma.sv
 
+TENSOR_SOURCES := \
+	$(CURDIR)/rtl/tensor/tensor_pkg.sv \
+	$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_pe.sv \
+	$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_systolic_array.sv \
+	$(CURDIR)/rtl/tensor/MXU/INT8_GEMM/tensor_gemm_core.sv \
+	$(CURDIR)/tb/tensor/tb_tensor_gemm_core.sv
+
 TOP_SOURCES := \
+	$(CURDIR)/rtl/interface/core_v_xif.sv \
 	$(CURDIR)/rtl/common/minitensor_pkg.sv \
+	$(CURDIR)/rtl/tensor/tensor_pkg.sv \
 	$(CURDIR)/rtl/vector/vpu_pkg.sv \
 	$(CURDIR)/rtl/vector/vpu_vector_regfile.sv \
 	$(CURDIR)/rtl/vector/vpu_vector_alu.sv \
 	$(CURDIR)/rtl/control/vpu_vector_controller.sv \
+	$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_pe.sv \
+	$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_systolic_array.sv \
+	$(CURDIR)/rtl/tensor/MXU/INT8_GEMM/tensor_gemm_core.sv \
+	$(CURDIR)/rtl/tensor/tensor_controller.sv \
 	$(CURDIR)/rtl/memory/unified_buffer.sv \
 	$(CURDIR)/rtl/memory/vpu_dma.sv \
 	$(CURDIR)/rtl/top/mini_tensor_top.sv \
 	$(CURDIR)/tb/top/tb_mini_tensor_top.sv
 
-.PHONY: sim npc-sim vector-sim ub-sim dma-sim top-sim vrf-sim clean
+.PHONY: sim regress npc-sim vector-sim vrf-sim ub-sim dma-sim tensor-sim top-sim clean
 
 sim: top-sim
+
+regress:
+	$(MAKE) vector-sim
+	$(MAKE) vrf-sim
+	$(MAKE) ub-sim
+	$(MAKE) dma-sim
+	$(MAKE) tensor-sim
+	$(MAKE) top-sim
 
 npc-sim: top-sim
 
@@ -60,6 +81,12 @@ dma-sim:
 	CCACHE_DISABLE=1 $(VERILATOR) $(COMMON_FLAGS) --Mdir $(OBJ_DIR)/dma \
 		--top-module tb_vpu_dma $(DMA_SOURCES)
 	$(OBJ_DIR)/dma/Vtb_vpu_dma
+
+tensor-sim:
+	mkdir -p $(OBJ_DIR)/tensor
+	CCACHE_DISABLE=1 $(VERILATOR) $(COMMON_FLAGS) --Mdir $(OBJ_DIR)/tensor \
+		--top-module tb_tensor_gemm_core $(TENSOR_SOURCES)
+	$(OBJ_DIR)/tensor/Vtb_tensor_gemm_core
 
 top-sim:
 	mkdir -p $(OBJ_DIR)/top

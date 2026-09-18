@@ -36,20 +36,23 @@ rtl/
   vector/vpu_vector_regfile.sv      32 x 128-bit VRF
   vector/vpu_vector_alu.sv          16-lane INT8 ALU
   top/mini_tensor_top.sv            唯一的 NPC-facing 集成顶层
-  tensor/                            后续 MXU 与 Epilogue
+  tensor/tensor_pkg.sv                MT_GEMM 编码和 Tile 常量
+  tensor/tensor_controller.sv         UB 读写与 GEMM 控制
+  tensor/MXU/Systolic_Array/          4x4 PE 和脉动阵列
+  tensor/MXU/INT8_GEMM/               4x4 INT8 -> INT32 GEMM Core
 tb/
   top/tb_mini_tensor_top.sv         NPC + Uncached Memory 功能模型
-  control/ memory/ vector/           独立单元测试
+  control/ memory/ vector/ tensor/   独立单元测试
 for_ai/                              赛题和项目背景
 ```
 
-旧的 `vpu_vector_npc_adapter` 已被统一顶层取代。NPC 模型仍使用 issue、commit/kill、
-result ready/valid 事务，不修改外部 NPC 工程。`core_v_xif.sv` 保留为后续 Chisel
-扁平 Bundle 到标准 CV-X-IF 的连接依据。
+旧的 `vpu_vector_npc_adapter` 已被统一顶层取代。`mini_tensor_top` 直接接收
+`core_v_xif` interface；NPC 模型通过独立的 issue、register、commit/kill 和 result
+通道完成事务，不修改外部 NPC 工程。
 
 ## 指令与参数
 
-三类指令都使用 `custom-0`，完成后向 `rd` 返回标量状态 `0`。只有收到匹配
+四类指令都使用 `custom-0`，完成后向 `rd` 返回标量状态 `0`。只有收到匹配
 `id/hartid` 的正常 commit 后才产生 UB 或外部内存副作用。
 
 ### MT_LOAD
@@ -87,7 +90,23 @@ rs2 value[7:0]  = UB 起始行号
 rs2 value[15:8] = 128-bit 数据行数，必须非零
 ```
 
-所有命令都会检查保留位、地址对齐和 UB 范围；非法参数不会被接受。
+所有命令都会检查保留位、地址对齐和 UB 范围。无法识别的指令不会在 issue
+阶段接受；操作数在后续 register 阶段到达，因此非法操作数返回 `result.err`，且
+不会产生 UB 或外部内存副作用。
+
+### MT_GEMM
+
+`funct7 = 0000101, funct3 = 000`，执行一个 4x4 signed INT8 Tile GEMM：
+
+```text
+rs1 value[7:0]  = A UB 行号
+rs1 value[15:8] = B UB 行号
+rs2 value[7:0]  = C UB 起始行号，使用 C..C+3
+```
+
+A、B 为行主序 INT8；C 为四行、每行四个 signed INT32。GEMM 结果不会经过
+CPU GPR，而是直接写回 UB。非法保留位或越界参数在 register 阶段标记为错误，
+不会产生 UB 写入。
 
 ## 控制与存储
 
@@ -113,8 +132,9 @@ make sim
 PASS: NPC drove Memory -> UB -> VPU -> UB -> Memory closed loop
 ```
 
-该测试依次提交 `MT_LOAD`、`VADD8`、`MT_STORE`，检查 commit 前无副作用、结果
-backpressure、UB 中间结果、外部内存最终结果和 killed store 无写入。
+该测试依次提交 `MT_LOAD`、`VADD8`、`MT_STORE`、两 Tile `MT_LOAD`、`MT_GEMM`、
+四行 `MT_STORE`，检查 commit 前无副作用、结果 backpressure、UB 中间结果、
+外部内存最终结果和 killed 命令无写入。
 
 独立回归：
 
@@ -123,12 +143,15 @@ make vector-sim
 make vrf-sim
 make ub-sim
 make dma-sim
+make tensor-sim
+make regress
 ```
 
-`dma-sim` 同时验证 Memory -> UB 和 UB -> Memory。
+`dma-sim` 同时验证 Memory -> UB 和 UB -> Memory；`tensor-sim` 使用软件黄金模型
+验证 identity 和随机 4x4 signed INT8 GEMM，并检查 result backpressure。
 
 ## 下一步
 
-下一步应先把 `mini_tensor_top` 的扁平 NPC 端口接到实际 Chisel Bundle，并在 NPC
-侧执行上述三条指令序列；TensorCore、双缓冲、多 Bank、多 outstanding 和命令队列
-继续保持预留。
+下一步是增加 K 维分块累加和 Epilogue（Bias/Requant/ReLU），之后再评估双缓冲、
+多 Bank、多 outstanding 和命令队列。实际 NPC 仍只需通过现有 `core_v_xif`
+Bundle 发出 `MT_GEMM`，无需修改 NPC 模块。
