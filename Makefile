@@ -1,17 +1,6 @@
 VERILATOR ?= verilator
 OBJ_DIR    ?= $(CURDIR)/obj_dir
-WAVE_FILE  := $(CURDIR)/vector_controller.vcd
-
 COMMON_FLAGS := --binary --timing --Wall --Wno-fatal
-
-NPC_SOURCES := \
-	$(CURDIR)/rtl/interface/core_v_xif.sv \
-	$(CURDIR)/rtl/vector/vpu_pkg.sv \
-	$(CURDIR)/rtl/vector/vpu_vector_regfile.sv \
-	$(CURDIR)/rtl/vector/vpu_vector_alu.sv \
-	$(CURDIR)/rtl/control/vpu_vector_controller.sv \
-	$(CURDIR)/rtl/frontend/vpu_vector_npc_adapter.sv \
-	$(CURDIR)/tb/frontend/tb_vpu_vector_npc_adapter.sv
 
 VECTOR_SOURCES := \
 	$(CURDIR)/rtl/vector/vpu_pkg.sv \
@@ -31,20 +20,20 @@ DMA_SOURCES := \
 
 TOP_SOURCES := \
 	$(CURDIR)/rtl/common/minitensor_pkg.sv \
+	$(CURDIR)/rtl/vector/vpu_pkg.sv \
+	$(CURDIR)/rtl/vector/vpu_vector_regfile.sv \
+	$(CURDIR)/rtl/vector/vpu_vector_alu.sv \
+	$(CURDIR)/rtl/control/vpu_vector_controller.sv \
 	$(CURDIR)/rtl/memory/unified_buffer.sv \
 	$(CURDIR)/rtl/memory/vpu_dma.sv \
 	$(CURDIR)/rtl/top/mini_tensor_top.sv \
 	$(CURDIR)/tb/top/tb_mini_tensor_top.sv
 
-.PHONY: sim npc-sim vector-sim ub-sim dma-sim top-sim vrf-sim wave clean
+.PHONY: sim npc-sim vector-sim ub-sim dma-sim top-sim vrf-sim clean
 
-sim: vector-sim
+sim: top-sim
 
-npc-sim:
-	mkdir -p $(OBJ_DIR)/npc
-	CCACHE_DISABLE=1 $(VERILATOR) $(COMMON_FLAGS) --Mdir $(OBJ_DIR)/npc \
-		--top-module tb_vpu_vector_npc_adapter $(NPC_SOURCES)
-	$(OBJ_DIR)/npc/Vtb_vpu_vector_npc_adapter
+npc-sim: top-sim
 
 vector-sim:
 	mkdir -p $(OBJ_DIR)/vector
@@ -78,10 +67,5 @@ top-sim:
 		--top-module tb_mini_tensor_top $(TOP_SOURCES)
 	$(OBJ_DIR)/top/Vtb_mini_tensor_top
 
-wave:
-	$(MAKE) sim VERILATOR_FLAGS="--trace -DTRACE"
-	@test -f $(WAVE_FILE)
-	@echo "waveform: $(WAVE_FILE)"
-
 clean:
-	rm -rf $(OBJ_DIR) $(WAVE_FILE)
+	rm -rf $(OBJ_DIR)

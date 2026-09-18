@@ -2,11 +2,15 @@
 
 module tb_mini_tensor_top;
   import minitensor_pkg::*;
+  import vpu_pkg::*;
 
   localparam int unsigned DATA_WIDTH = 128;
-  localparam int unsigned UB_DEPTH = 256;
-  localparam int unsigned UB_ADDR_WIDTH = $clog2(UB_DEPTH);
-  localparam int unsigned TILE_COUNT = 4;
+  localparam logic [DATA_WIDTH-1:0] INPUT_A =
+      128'h7f05ff80_7d03fd80_7c02fc80_7b01fb80;
+  localparam logic [DATA_WIDTH-1:0] INPUT_B =
+      128'h01010101_01010101_01010101_01010101;
+  localparam logic [DATA_WIDTH-1:0] EXPECTED_ADD =
+      128'h80060081_7e04fe81_7d03fd81_7c02fc81;
 
   logic clk, rst;
   always #5 clk = ~clk;
@@ -18,24 +22,30 @@ module tb_mini_tensor_top;
   logic [3:0] commit_id;
   logic result_valid, result_ready;
   logic [3:0] result_id;
-  logic [4:0] result_rd;
-  logic [31:0] result_data;
-  logic result_we, result_exc, result_dbg, result_err;
   logic result_hartid;
+  logic [31:0] result_data;
+  logic [4:0] result_rd;
+  logic result_we, result_exc, result_dbg, result_err;
   logic [5:0] result_exccode;
+
   logic mem_rd_valid, mem_rd_ready, mem_rsp_valid, mem_rsp_ready;
   logic [31:0] mem_rd_addr;
   logic [DATA_WIDTH-1:0] mem_rsp_data;
+  logic mem_wr_valid, mem_wr_ready;
+  logic [31:0] mem_wr_addr;
+  logic [DATA_WIDTH-1:0] mem_wr_data;
+  logic [DATA_WIDTH/8-1:0] mem_wr_be;
+
   logic ub_rd_en, ub_rd_valid;
-  logic [UB_ADDR_WIDTH-1:0] ub_rd_addr;
+  logic [7:0] ub_rd_addr;
   logic [DATA_WIDTH-1:0] ub_rd_data;
   logic dma_busy;
 
-  logic [DATA_WIDTH-1:0] backing_mem [0:TILE_COUNT-1];
+  logic [DATA_WIDTH-1:0] source_mem [0:1];
+  logic [DATA_WIDTH-1:0] stored_result;
   logic mem_pending;
   logic [DATA_WIDTH-1:0] pending_data;
-  integer request_count;
-  integer response_count;
+  integer read_count, response_count, write_count;
 
   mini_tensor_top dut (
     .clk, .rst,
@@ -47,16 +57,18 @@ module tb_mini_tensor_top;
     .npc_commit_hartid(1'b0), .npc_commit_kill(commit_kill),
     .npc_result_valid(result_valid), .npc_result_ready(result_ready),
     .npc_result_id(result_id), .npc_result_hartid(result_hartid),
-    .npc_result_data(result_data),
-    .npc_result_rd(result_rd), .npc_result_we(result_we), .npc_result_exc(result_exc),
+    .npc_result_data(result_data), .npc_result_rd(result_rd),
+    .npc_result_we(result_we), .npc_result_exc(result_exc),
     .npc_result_exccode(result_exccode), .npc_result_dbg(result_dbg),
     .npc_result_err(result_err),
     .mem_rd_valid, .mem_rd_ready, .mem_rd_addr,
     .mem_rsp_valid, .mem_rsp_ready, .mem_rsp_data,
+    .mem_wr_valid, .mem_wr_ready, .mem_wr_addr, .mem_wr_data, .mem_wr_be,
     .ub_rd_en, .ub_rd_addr, .ub_rd_valid, .ub_rd_data, .dma_busy
   );
 
   assign mem_rd_ready = 1'b1;
+  assign mem_wr_ready = 1'b1;
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -64,39 +76,81 @@ module tb_mini_tensor_top;
       mem_rsp_data <= '0;
       mem_pending <= 1'b0;
       pending_data <= '0;
-      request_count <= 0;
+      stored_result <= '0;
+      read_count <= 0;
       response_count <= 0;
+      write_count <= 0;
     end else begin
       mem_rsp_valid <= mem_pending;
       mem_rsp_data <= pending_data;
       mem_pending <= 1'b0;
       if (mem_rd_valid && mem_rd_ready) begin
-        if (mem_rd_addr >= TILE_COUNT * 16)
-          $fatal(1, "DMA issued out-of-range address %h", mem_rd_addr);
-        pending_data <= backing_mem[mem_rd_addr[5:4]];
+        if (mem_rd_addr >= 32)
+          $fatal(1, "unexpected memory read address %h", mem_rd_addr);
+        pending_data <= source_mem[mem_rd_addr[4]];
         mem_pending <= 1'b1;
-        request_count <= request_count + 1;
+        read_count <= read_count + 1;
       end
       if (mem_rsp_valid && mem_rsp_ready)
         response_count <= response_count + 1;
+      if (mem_wr_valid && mem_wr_ready) begin
+        if (mem_wr_addr != 32'h0000_0100 || mem_wr_be !== '1)
+          $fatal(1, "unexpected memory write transaction");
+        stored_result <= mem_wr_data;
+        write_count <= write_count + 1;
+      end
     end
   end
 
-  task automatic drive_issue(input logic [3:0] id, input logic [31:0] src,
-                             input logic [7:0] count, input logic [7:0] dst);
+  task automatic issue_command(
+      input logic [31:0] instr,
+      input logic [31:0] rs1,
+      input logic [31:0] rs2,
+      input logic [3:0] id);
     begin
       @(negedge clk);
+      issue_instr = instr;
+      issue_rs1 = rs1;
+      issue_rs2 = rs2;
       issue_id = id;
-      issue_rs1 = src;
-      issue_rs2 = {16'h0, count, dst};
-      issue_instr = make_minitensor_load(5'd7, 5'd1, 5'd2);
       issue_valid = 1'b1;
       while (!issue_ready) @(negedge clk);
       #1;
-      if (!issue_accept) $fatal(1, "MT_LOAD was not accepted");
+      if (!issue_accept) $fatal(1, "command was not accepted: %h", instr);
       @(posedge clk);
       @(negedge clk);
       issue_valid = 1'b0;
+    end
+  endtask
+
+  task automatic commit_command(input logic [3:0] id, input logic kill);
+    begin
+      @(negedge clk);
+      commit_id = id;
+      commit_kill = kill;
+      commit_valid = 1'b1;
+      @(posedge clk);
+      @(negedge clk);
+      commit_valid = 1'b0;
+      commit_kill = 1'b0;
+    end
+  endtask
+
+  task automatic accept_result(input logic [3:0] id, input logic [4:0] rd);
+    begin
+      while (!result_valid) @(negedge clk);
+      repeat (2) begin
+        #1;
+        if (!result_valid || result_id !== id || result_rd !== rd ||
+            result_hartid !== 1'b0 || result_data !== 0 || !result_we ||
+            result_exc || result_exccode !== 0 || result_dbg || result_err)
+          $fatal(1, "result changed under backpressure");
+        @(negedge clk);
+      end
+      result_ready = 1'b1;
+      @(posedge clk);
+      @(negedge clk);
+      result_ready = 1'b0;
     end
   endtask
 
@@ -120,88 +174,59 @@ module tb_mini_tensor_top;
     rst = 1'b1;
     issue_valid = 1'b0;
     issue_instr = '0;
-    issue_id = '0;
     issue_rs1 = '0;
     issue_rs2 = '0;
+    issue_id = '0;
     commit_valid = 1'b0;
-    commit_id = '0;
     commit_kill = 1'b0;
+    commit_id = '0;
     result_ready = 1'b0;
     ub_rd_en = 1'b0;
     ub_rd_addr = '0;
-    backing_mem[0] = 128'h00112233445566778899aabbccddeeff;
-    backing_mem[1] = 128'h102132435465768798a9bacbdcedfe0f;
-    backing_mem[2] = 128'hfedcba98765432100123456789abcdef;
-    backing_mem[3] = 128'hffeeddccbbaa99887766554433221100;
+    source_mem[0] = INPUT_A;
+    source_mem[1] = INPUT_B;
 
     repeat (2) @(posedge clk);
+    @(negedge clk);
     rst = 1'b0;
 
-    drive_issue(4'd1, 32'h0000_0000, TILE_COUNT[7:0], 8'd12);
+    // 1. Memory -> UB[12:13]. No read is allowed before commit.
+    issue_command(make_minitensor_load(5'd5, 5'd1, 5'd2),
+                  32'h0000_0000, {16'h0, 8'd2, 8'd12}, 4'd1);
     repeat (2) @(posedge clk);
-    if (mem_rd_valid || dma_busy)
-      $fatal(1, "DMA started before commit");
+    if (read_count != 0 || dma_busy)
+      $fatal(1, "MT_LOAD had side effects before commit");
+    commit_command(4'd1, 1'b0);
+    accept_result(4'd1, 5'd5);
+    if (read_count != 2 || response_count != 2)
+      $fatal(1, "MT_LOAD transaction count mismatch");
+    read_ub(8'd12, INPUT_A);
+    read_ub(8'd13, INPUT_B);
 
-    @(negedge clk);
-    commit_id = 4'd1;
-    commit_valid = 1'b1;
-    @(posedge clk);
-    @(negedge clk);
-    commit_valid = 1'b0;
-    while (!dma_busy) @(negedge clk);
+    // 2. UB[12] + UB[13] -> VPU -> UB[14].
+    issue_command(make_vector_rtype(VPU_VECTOR_FUNCT3_ADD8, 5'd6, 5'd1, 5'd2),
+                  {16'h0, 8'd13, 8'd12}, {24'h0, 8'd14}, 4'd2);
+    commit_command(4'd2, 1'b0);
+    accept_result(4'd2, 5'd6);
+    read_ub(8'd14, EXPECTED_ADD);
 
-    // A second issue must remain blocked while the DMA owns the command slot.
-    issue_id = 4'd9;
-    issue_rs1 = 32'h0000_0000;
-    issue_rs2 = {16'h0, 8'd1, 8'd24};
-    issue_instr = make_minitensor_load(5'd8, 5'd1, 5'd2);
-    issue_valid = 1'b1;
-    repeat (2) begin
-      @(negedge clk);
-      if (issue_ready) $fatal(1, "new issue was accepted while DMA was busy");
-    end
-    issue_valid = 1'b0;
+    // 3. UB[14] -> Memory[0x100].
+    issue_command(make_minitensor_store(5'd7, 5'd1, 5'd2),
+                  32'h0000_0100, {16'h0, 8'd1, 8'd14}, 4'd3);
+    commit_command(4'd3, 1'b0);
+    accept_result(4'd3, 5'd7);
+    if (write_count != 1 || stored_result !== EXPECTED_ADD)
+      $fatal(1, "closed-loop stored result mismatch: %h", stored_result);
 
-    while (!result_valid) @(negedge clk);
-    #1;
-    if (result_id !== 4'd1 || result_rd !== 5'd7 || result_data !== 0 ||
-        result_hartid !== 1'b0 || !result_we || result_exc ||
-        result_exccode !== 0 || result_dbg || result_err)
-      $fatal(1, "MT_LOAD result mismatch");
+    // A killed store must not create another external write.
+    issue_command(make_minitensor_store(5'd8, 5'd1, 5'd2),
+                  32'h0000_0100, {16'h0, 8'd1, 8'd14}, 4'd4);
+    commit_command(4'd4, 1'b1);
+    repeat (4) @(posedge clk);
+    if (write_count != 1 || result_valid)
+      $fatal(1, "commit-kill allowed store side effects");
 
-    // Backpressure must not change or drop the result.
-    repeat (3) begin
-      @(negedge clk);
-      if (!result_valid || result_id !== 4'd1 || result_rd !== 5'd7 ||
-          result_data !== 0)
-        $fatal(1, "MT_LOAD result changed under backpressure");
-    end
-    result_ready = 1'b1;
-    @(posedge clk);
-    @(negedge clk);
-    result_ready = 1'b0;
-
-    if (request_count != TILE_COUNT || response_count != TILE_COUNT)
-      $fatal(1, "DMA count mismatch req=%0d rsp=%0d", request_count, response_count);
-    read_ub(8'd12, backing_mem[0]);
-    read_ub(8'd13, backing_mem[1]);
-    read_ub(8'd14, backing_mem[2]);
-    read_ub(8'd15, backing_mem[3]);
-
-    drive_issue(4'd2, 32'h0000_0000, 8'd1, 8'd20);
-    @(negedge clk);
-    commit_id = 4'd2;
-    commit_kill = 1'b1;
-    commit_valid = 1'b1;
-    @(posedge clk);
-    @(negedge clk);
-    commit_valid = 1'b0;
-    commit_kill = 1'b0;
-    repeat (3) @(posedge clk);
-    if (request_count != TILE_COUNT || result_valid)
-      $fatal(1, "commit kill allowed DMA side effects");
-
-    $display("PASS: committed MT_LOAD, commit-kill and UB integration completed");
+    $display("PASS: NPC drove Memory -> UB -> VPU -> UB -> Memory closed loop");
     $finish;
   end
 endmodule

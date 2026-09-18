@@ -1,121 +1,134 @@
 # miniTensor
 
-miniTensor 是挂接在 RV32 CPU 外部的 AI 协处理器。目前所有模块与 CPU 共用
-`clk/rst`，采用单命令在途、顺序 FSM 调度，暂不设计流水线。
-
-当前已经形成第一条集成数据通路：CPU 通过 CV-X-IF 风格接口发出 `MT_LOAD`，
-指令正常提交后，DMA 从 Uncached Memory 搬运连续的 128-bit 数据行到 4 KiB
-Unified Buffer，完成后向 CPU 返回状态。commit-kill 不会产生内存请求或 UB 写入。
-
-## 架构边界
+miniTensor 是 RV32 CPU 的外接 AI 协处理器。当前版本与 CPU 共用 `clk/rst`，采用
+单命令在途的顺序 FSM，暂不使用流水线。统一顶层已经打通：
 
 ```text
-RV32 CPU
-   | CV-X-IF control/result (32-bit rs1/rs2/result)
-   v
-mini_tensor_top
-   |-- sequential command FSM
-   |-- uncached DMA (128-bit, one outstanding read)
-   `-- Unified Buffer (256 x 128-bit, synchronous 1R1W)
-              |
-              +-- Vector Unit       implemented separately
-              `-- Tensor Unit       reserved
-
-DMA <------ uncached memory port ------> SRAM / DDR
+Uncached Memory
+      | MT_LOAD / 128-bit DMA read
+      v
+Unified Buffer
+      | two synchronous reads
+      v
+16-lane INT8 Vector Unit
+      | ADD8 / MAX8 / RELU8 result
+      v
+Unified Buffer
+      | MT_STORE / 128-bit DMA write
+      v
+Uncached Memory
 ```
 
-CV-X-IF 只承担指令、控制参数和标量完成结果。向量和矩阵数据通过 DMA 与
-Unified Buffer 搬运，不经过 CPU GPR。DMA 不支持硬件缓存一致性，软件必须使用
-Uncached 地址区，并避免通过 cacheable alias 同时访问同一缓冲区。
+CPU 只通过 CV-X-IF 风格的 32-bit 指令、`rs1/rs2` 参数和标量完成结果控制协处理器。
+向量数据不经过 CPU GPR。DMA 不提供硬件缓存一致性，软件必须使用 Uncached 地址，
+且不能通过 cacheable alias 同时访问同一缓冲区。
 
 ## 目录
 
 ```text
 rtl/
-  common/
-    minitensor_pkg.sv              miniTensor 指令编码
-  interface/
-    core_v_xif.sv                  Verilator 兼容 CV-X-IF 定义
-  frontend/
-    vpu_vector_npc_adapter.sv      现有 128-bit 向量演示适配器
-  control/
-    vpu_vector_controller.sv       顺序向量控制器
-  memory/
-    vpu_dma.sv                     单 outstanding Uncached Load DMA
-    unified_buffer.sv              4 KiB Local SRAM
-  vector/
-    vpu_pkg.sv                     向量指令编码
-    vpu_vector_regfile.sv          32 x 128-bit VRF
-    vpu_vector_alu.sv              16-lane INT8 ALU
-  top/
-    mini_tensor_top.sv             MT_LOAD 集成顶层
-  tensor/                          后续 MXU 与 Epilogue
+  common/minitensor_pkg.sv          MT_LOAD / MT_STORE 编码
+  interface/core_v_xif.sv           NPC 接入使用的 CV-X-IF 协议定义
+  control/vpu_vector_controller.sv  单命令向量控制器
+  memory/vpu_dma.sv                 双向、单 outstanding DMA
+  memory/unified_buffer.sv          256 x 128-bit Local SRAM
+  vector/vpu_pkg.sv                 ADD8 / MAX8 / RELU8 编码
+  vector/vpu_vector_regfile.sv      32 x 128-bit VRF
+  vector/vpu_vector_alu.sv          16-lane INT8 ALU
+  top/mini_tensor_top.sv            唯一的 NPC-facing 集成顶层
+  tensor/                            后续 MXU 与 Epilogue
 tb/
-  frontend/ control/ memory/ vector/ top/
-for_ai/                             赛题和项目背景
+  top/tb_mini_tensor_top.sv         NPC + Uncached Memory 功能模型
+  control/ memory/ vector/           独立单元测试
+for_ai/                              赛题和项目背景
 ```
 
-`rtl/` 只放可综合模块，`tb/` 只放仿真代码。不会修改外部 NPC 模块；真实接入时，
-由 NPC/Chisel wrapper 将扁平信号连接到 `mini_tensor_top`。
+旧的 `vpu_vector_npc_adapter` 已被统一顶层取代。NPC 模型仍使用 issue、commit/kill、
+result ready/valid 事务，不修改外部 NPC 工程。`core_v_xif.sv` 保留为后续 Chisel
+扁平 Bundle 到标准 CV-X-IF 的连接依据。
 
-## MT_LOAD
+## 指令与参数
 
-`MT_LOAD` 使用 R-type custom-0 编码：
+三类指令都使用 `custom-0`，完成后向 `rd` 返回标量状态 `0`。只有收到匹配
+`id/hartid` 的正常 commit 后才产生 UB 或外部内存副作用。
+
+### MT_LOAD
 
 ```text
-31:25  funct7 = 0000011
-24:20  rs2
-19:15  rs1
-14:12  funct3 = 000
-11:7   rd
-6:0    opcode = 0001011
+funct7 = 0000011, funct3 = 000
+rs1 value       = Uncached Memory 源字节地址，16-byte 对齐
+rs2 value[7:0]  = UB 起始行号
+rs2 value[15:8] = 128-bit 数据行数，必须非零
 ```
 
-CPU 已读取的寄存器值含义：
+### Vector
+
+沿用 `funct7=0000010`：
 
 ```text
-rs1[31:0]  Uncached Memory 源字节地址
-rs2[7:0]   Unified Buffer 起始行号
-rs2[15:8]  搬运的 128-bit 行数，必须非零
-rd          状态返回寄存器；成功返回 0
+funct3 = 000  ADD8
+funct3 = 001  MAX8
+funct3 = 010  RELU8
+
+rs1 value[7:0]  = UB 源操作数 A 行号
+rs1 value[15:8] = UB 源操作数 B 行号
+rs2 value[7:0]  = UB 结果行号
 ```
 
-源地址必须按 16 byte 对齐，`rs2[31:16]` 必须为零，目标范围不能越过 UB；
-不满足约束的指令不会被接受。
+顶层顺序读取两行 UB，将数据装入内部 VRF 的 `v1/v2`，执行结果写入 `v3` 和指定
+UB 行。RELU8 只使用操作数 A；当前控制器仍读取 B，以保持统一的非流水控制流程。
 
-执行状态依次为 `IDLE -> WAIT_COMMIT -> DMA_START -> DMA_WAIT -> RESULT`。
-只有匹配 `id/hartid` 的正常 commit 才会启动 DMA。
+### MT_STORE
+
+```text
+funct7 = 0000100, funct3 = 000
+rs1 value       = Uncached Memory 目标字节地址，16-byte 对齐
+rs2 value[7:0]  = UB 起始行号
+rs2 value[15:8] = 128-bit 数据行数，必须非零
+```
+
+所有命令都会检查保留位、地址对齐和 UB 范围；非法参数不会被接受。
+
+## 控制与存储
+
+统一顶层一次只接受一条指令。DMA、VPU 和外部 debug 读端口按命令阶段独占 UB，
+所以当前 1R1W SRAM 不需要多 Bank 仲裁。DMA Load 使用显式 read request/response，
+DMA Store 使用 write ready/valid；两个方向都只允许一个 outstanding 事务。
+
+commit-kill 只在命令开始产生副作用前处理。一旦收到正常 commit，当前命令运行到
+完成，并保持 result valid，直到 NPC 拉高 result ready。
 
 ## 仿真
 
-运行完整的 `MT_LOAD` 集成测试：
+完整 NPC 闭环：
 
 ```sh
-make top-sim
+make sim
+# 等价：make top-sim 或 make npc-sim
 ```
 
-测试覆盖 commit 前无副作用、正常 DMA 搬运、busy 时阻止新指令、result
-backpressure 保持以及 commit-kill。预期最后一行：
+预期结果：
 
 ```text
-PASS: committed MT_LOAD, commit-kill and UB integration completed
+PASS: NPC drove Memory -> UB -> VPU -> UB -> Memory closed loop
 ```
 
-其他独立测试：
+该测试依次提交 `MT_LOAD`、`VADD8`、`MT_STORE`，检查 commit 前无副作用、结果
+backpressure、UB 中间结果、外部内存最终结果和 killed store 无写入。
+
+独立回归：
 
 ```sh
-make npc-sim
 make vector-sim
 make vrf-sim
 make ub-sim
 make dma-sim
 ```
 
-现有 `vpu_vector_npc_adapter` 使用 128-bit `X_RFR_WIDTH`，仅用于向量功能验证。
-真实 RV32 miniTensor 顶层的 `rs1/rs2/result` 均为 32-bit。
+`dma-sim` 同时验证 Memory -> UB 和 UB -> Memory。
 
 ## 下一步
 
-在保持单时钟、单命令和非流水架构的前提下，为 DMA 增加 UB 到 Uncached Memory
-的 `MT_STORE`，形成 Memory -> UB -> Memory 的闭环。TensorCore、多 Bank、双缓冲、
-多 outstanding 和命令队列继续保持预留。
+下一步应先把 `mini_tensor_top` 的扁平 NPC 端口接到实际 Chisel Bundle，并在 NPC
+侧执行上述三条指令序列；TensorCore、双缓冲、多 Bank、多 outstanding 和命令队列
+继续保持预留。
