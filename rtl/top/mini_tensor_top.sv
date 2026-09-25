@@ -40,7 +40,7 @@ module mini_tensor_top #(
   import tensor_pkg::*;
   import vpu_pkg::*;
 
-  typedef enum logic [1:0] {OP_LOAD, OP_STORE, OP_VECTOR, OP_TENSOR} op_t;
+  typedef enum logic [2:0] {OP_LOAD, OP_STORE, OP_VECTOR, OP_TENSOR, OP_EPILOGUE} op_t;
   typedef enum logic [3:0] {
     S_IDLE,
     S_WAIT_COMMIT,
@@ -55,6 +55,8 @@ module mini_tensor_top #(
     S_VEC_WAIT,
     S_TENSOR_START,
     S_TENSOR_WAIT,
+    S_EPILOGUE_START,
+    S_EPILOGUE_WAIT,
     S_RESULT
   } state_t;
 
@@ -68,6 +70,8 @@ module mini_tensor_top #(
   logic [COUNT_WIDTH-1:0] tile_count_q;
   logic [UB_ADDR_WIDTH-1:0] vec_src_a_q, vec_src_b_q, vec_dst_q;
   logic [2:0] vec_funct3_q;
+  logic tensor_accumulate_q;
+  logic [UB_ADDR_WIDTH-1:0] ep_config_addr_q;
   logic [31:0] rs1_q, rs2_q;
   logic register_seen_q, committed_q, command_err_q;
 
@@ -97,11 +101,18 @@ module mini_tensor_top #(
   logic [DATA_WIDTH-1:0] tensor_ub_wr_data;
   logic [DATA_WIDTH/8-1:0] tensor_ub_wr_be;
 
+  logic ep_cmd_valid, ep_cmd_ready, ep_busy, ep_done;
+  logic ep_ub_rd_en, ep_ub_wr_en;
+  logic [UB_ADDR_WIDTH-1:0] ep_ub_rd_addr, ep_ub_wr_addr;
+  logic [DATA_WIDTH-1:0] ep_ub_wr_data;
+  logic [DATA_WIDTH/8-1:0] ep_ub_wr_be;
+
   wire issue_load = is_minitensor_load(xif.issue_req.instr);
   wire issue_store = is_minitensor_store(xif.issue_req.instr);
   wire issue_vector = is_vector_instruction(xif.issue_req.instr);
   wire issue_tensor = is_tensor_gemm(xif.issue_req.instr);
-  wire issue_supported = issue_load || issue_store || issue_vector || issue_tensor;
+  wire issue_epilogue = is_tensor_epilogue(xif.issue_req.instr);
+  wire issue_supported = issue_load || issue_store || issue_vector || issue_tensor || issue_epilogue;
   wire count_valid = (rs2_q[15:8] != 8'h00);
   wire [8:0] ub_end = {1'b0, rs2_q[7:0]} + {1'b0, rs2_q[15:8]};
   wire dma_operands_valid = (rs2_q[31:16] == 16'h0000) &&
@@ -113,16 +124,24 @@ module mini_tensor_top #(
       ({1'b0, rs1_q[15:8]} < 9'(UB_DEPTH)) &&
       ({1'b0, rs2_q[7:0]} < 9'(UB_DEPTH));
   wire tensor_operands_valid = (rs1_q[31:16] == 16'h0000) &&
-      (rs2_q[31:8] == 24'h000000) &&
+      (rs2_q[31:9] == 23'h000000) &&
       ({1'b0, rs1_q[7:0]} < 9'(UB_DEPTH)) &&
       ({1'b0, rs1_q[15:8]} < 9'(UB_DEPTH)) &&
       ({1'b0, rs2_q[7:0]} + 9'd3 < 9'(UB_DEPTH));
+  wire epilogue_operands_valid = (rs1_q[31:16] == 16'h0000) &&
+      (rs2_q[31:16] == 16'h0000) &&
+      ({1'b0, rs1_q[7:0]} + 9'd3 < 9'(UB_DEPTH)) &&
+      ({1'b0, rs1_q[15:8]} + 9'd3 < 9'(UB_DEPTH)) &&
+      ({1'b0, rs2_q[15:8]} < 9'(UB_DEPTH)) &&
+      ({1'b0, rs2_q[7:0]} < 9'(UB_DEPTH));
   wire operands_valid = (op_q == OP_VECTOR) ? vector_operands_valid :
-      ((op_q == OP_TENSOR) ? tensor_operands_valid : dma_operands_valid);
+      ((op_q == OP_TENSOR) ? tensor_operands_valid :
+      ((op_q == OP_EPILOGUE) ? epilogue_operands_valid : dma_operands_valid));
   wire issue_fire = xif.issue_valid && xif.issue_ready &&
       xif.issue_resp.accept;
   wire register_match = (xif.register.id == id_q) &&
       (xif.register.hartid == hartid_q);
+  wire register_operands_valid = (xif.register.rs_valid == 2'b11);
   wire register_fire = xif.register_valid && xif.register_ready;
   wire commit_match = xif.commit_valid && (xif.commit.id == id_q) &&
       (xif.commit.hartid == hartid_q);
@@ -139,6 +158,7 @@ module mini_tensor_top #(
       $fatal(1, "mini_tensor_top currently requires X_ID_WIDTH=4");
   end
 
+//core's response to the XIF "issue" handshake
   assign xif.issue_ready = (state_q == S_IDLE);
   always_comb begin
     xif.issue_resp = '0;
@@ -148,6 +168,7 @@ module mini_tensor_top #(
   end
   assign xif.register_ready = (state_q == S_WAIT_COMMIT) && !register_seen_q;
 
+//the write-back result that the accelerator sends back to the interface when the command finishes
   assign xif.result_valid = (state_q == S_RESULT);
   always_comb begin
     xif.result = '0;
@@ -168,6 +189,7 @@ module mini_tensor_top #(
   assign dma_cmd_write = (op_q == OP_STORE);
 
   assign tensor_cmd_valid = (state_q == S_TENSOR_START);
+  assign ep_cmd_valid = (state_q == S_EPILOGUE_START);
 
   tensor_controller #(
     .UB_ADDR_WIDTH(UB_ADDR_WIDTH)
@@ -179,6 +201,7 @@ module mini_tensor_top #(
     .cmd_a_addr(vec_src_a_q),
     .cmd_b_addr(vec_src_b_q),
     .cmd_c_addr(vec_dst_q),
+    .cmd_accumulate(tensor_accumulate_q),
     .busy(tensor_busy),
     .done(tensor_done),
     .ub_rd_en(tensor_ub_rd_en),
@@ -189,6 +212,29 @@ module mini_tensor_top #(
     .ub_wr_addr(tensor_ub_wr_addr),
     .ub_wr_data(tensor_ub_wr_data),
     .ub_wr_be(tensor_ub_wr_be)
+  );
+
+  tensor_epilogue_controller #(
+    .UB_ADDR_WIDTH(UB_ADDR_WIDTH)
+  ) u_tensor_epilogue_controller (
+    .clk,
+    .rst,
+    .cmd_valid(ep_cmd_valid),
+    .cmd_ready(ep_cmd_ready),
+    .cmd_c_addr(vec_src_a_q),
+    .cmd_bias_addr(vec_src_b_q),
+    .cmd_config_addr(ep_config_addr_q),
+    .cmd_output_addr(vec_dst_q),
+    .busy(ep_busy),
+    .done(ep_done),
+    .ub_rd_en(ep_ub_rd_en),
+    .ub_rd_addr(ep_ub_rd_addr),
+    .ub_rd_valid(ub_mem_rd_valid),
+    .ub_rd_data(ub_mem_rd_data),
+    .ub_wr_en(ep_ub_wr_en),
+    .ub_wr_addr(ep_ub_wr_addr),
+    .ub_wr_data(ep_ub_wr_data),
+    .ub_wr_be(ep_ub_wr_be)
   );
 
   vpu_dma #(
@@ -273,6 +319,9 @@ module mini_tensor_top #(
     end else if (tensor_ub_rd_en) begin
       ub_mem_rd_en = 1'b1;
       ub_mem_rd_addr = tensor_ub_rd_addr;
+    end else if (ep_ub_rd_en) begin
+      ub_mem_rd_en = 1'b1;
+      ub_mem_rd_addr = ep_ub_rd_addr;
     end else if (ub_rd_en) begin
       ub_mem_rd_en = 1'b1;
       ub_mem_rd_addr = ub_rd_addr;
@@ -289,6 +338,11 @@ module mini_tensor_top #(
       ub_mem_wr_addr = tensor_ub_wr_addr;
       ub_mem_wr_data = tensor_ub_wr_data;
       ub_mem_wr_be = tensor_ub_wr_be;
+    end else if (ep_ub_wr_en) begin
+      ub_mem_wr_en = 1'b1;
+      ub_mem_wr_addr = ep_ub_wr_addr;
+      ub_mem_wr_data = ep_ub_wr_data;
+      ub_mem_wr_be = ep_ub_wr_be;
     end else if (vector_result_fire) begin
       ub_mem_wr_en = 1'b1;
       ub_mem_wr_addr = vec_dst_q;
@@ -326,6 +380,9 @@ module mini_tensor_top #(
       if (tensor_busy && (state_q != S_TENSOR_START) &&
           (state_q != S_TENSOR_WAIT))
         $fatal(1, "tensor controller is busy outside tensor top-level states");
+      if (ep_busy && (state_q != S_EPILOGUE_START) &&
+          (state_q != S_EPILOGUE_WAIT))
+        $fatal(1, "epilogue controller is busy outside epilogue top-level states");
     end
   end
 
@@ -343,6 +400,8 @@ module mini_tensor_top #(
       vec_src_b_q <= '0;
       vec_dst_q <= '0;
       vec_funct3_q <= '0;
+      tensor_accumulate_q <= 1'b0;
+      ep_config_addr_q <= '0;
       rs1_q <= '0;
       rs2_q <= '0;
       register_seen_q <= 1'b0;
@@ -357,7 +416,8 @@ module mini_tensor_top #(
             rd_q <= xif.issue_req.instr[11:7];
             op_q <= issue_load ? OP_LOAD :
                 (issue_store ? OP_STORE :
-                (issue_tensor ? OP_TENSOR : OP_VECTOR));
+                (issue_tensor ? OP_TENSOR :
+                (issue_epilogue ? OP_EPILOGUE : OP_VECTOR)));
             vec_funct3_q <= xif.issue_req.instr[14:12];
             register_seen_q <= 1'b0;
             committed_q <= 1'b0;
@@ -375,8 +435,10 @@ module mini_tensor_top #(
             vec_src_a_q <= xif.register.rs[0][UB_ADDR_WIDTH-1:0];
             vec_src_b_q <= xif.register.rs[0][8 +: UB_ADDR_WIDTH];
             vec_dst_q <= xif.register.rs[1][UB_ADDR_WIDTH-1:0];
+            tensor_accumulate_q <= xif.register.rs[1][TENSOR_GEMM_ACCUMULATE_BIT];
+            ep_config_addr_q <= xif.register.rs[1][15:8];
             register_seen_q <= 1'b1;
-            if (!register_match)
+            if (!register_match || !register_operands_valid)
               command_err_q <= 1'b1;
           end
           if (commit_fire)
@@ -397,7 +459,8 @@ module mini_tensor_top #(
             state_q <= S_RESULT;
           end else begin
             state_q <= (op_q == OP_VECTOR) ? S_VEC_READ_A :
-                ((op_q == OP_TENSOR) ? S_TENSOR_START : S_DMA_START);
+                ((op_q == OP_TENSOR) ? S_TENSOR_START :
+                ((op_q == OP_EPILOGUE) ? S_EPILOGUE_START : S_DMA_START));
           end
         end
         S_DMA_START: begin
@@ -432,6 +495,14 @@ module mini_tensor_top #(
         end
         S_TENSOR_WAIT: begin
           if (tensor_done)
+            state_q <= S_RESULT;
+        end
+        S_EPILOGUE_START: begin
+          if (ep_cmd_valid && ep_cmd_ready)
+            state_q <= S_EPILOGUE_WAIT;
+        end
+        S_EPILOGUE_WAIT: begin
+          if (ep_done)
             state_q <= S_RESULT;
         end
         S_RESULT: begin

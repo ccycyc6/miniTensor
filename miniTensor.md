@@ -30,7 +30,7 @@
 
 - 当前不提供硬件 cache 一致性、cacheable/uncached alias 检测或乱序执行。
 - 当前不支持多命令队列、多个 outstanding DMA、双缓冲或计算流水线。
-- 当前 GEMM 仅覆盖一个 4×4×4 Tile，不包含 K 维分块累加和 Epilogue。
+- 当前 Tensor 路径覆盖一个 4×4 Tile、K 维分块累加以及单行 INT8 Epilogue；仍未实现流水化和多命令并发。
 
 ## 2. 顶层架构
 
@@ -41,6 +41,7 @@ flowchart TD
     D[vpu_dma<br/>单 outstanding DMA]
     V[Vector Controller<br/>VRF + 16-lane INT8 ALU]
     G[Tensor Controller<br/>4x4 INT8 GEMM]
+    E[Tensor Epilogue<br/>Bias/Requant/ReLU]
     U[Unified Buffer<br/>256 x 128-bit SRAM<br/>1R1W、同步读]
     M[MXU datapath<br/>4x4 systolic array<br/>INT32 accumulators]
     R[结果写回 UB<br/>CV-X-IF result: rd = 0]
@@ -57,6 +58,8 @@ flowchart TD
     U --> G
     G --> M
     M --> G
+    E --> U
+    U --> E
     U --> R
 ```
 
@@ -86,6 +89,7 @@ UB；命令完成后，顶层通过 CV-X-IF result 通道返回标量 `rd = 0`�
 | `rtl/tensor/tensor_controller.sv` | A/B UB 读取、MXU 启动、四行 C 写回 |
 | `rtl/tensor/MXU/Systolic_Array/*` | 4×4 PE 脉动阵列和 INT8×INT8→INT32 MAC |
 | `rtl/tensor/MXU/INT8_GEMM/tensor_gemm_core.sv` | 固定 10-cycle GEMM 计算窗口 |
+| `rtl/tensor/Epilogue/*` | 读取 C/Bias/config，完成 INT32→INT8 量化并写回一行 |
 
 ## 4. 外部接口契约
 
@@ -174,10 +178,28 @@ CPU                  miniTensor
 | `rs1[7:0]` | A 起始 UB 行（占 1 行） |
 | `rs1[15:8]` | B 起始 UB 行（占 1 行） |
 | `rs2[7:0]` | C 起始 UB 行，使用 `C..C+3` |
-| 保留位 | `rs1[31:16]`、`rs2[31:8]` 必须为 0 |
+| `rs2[8]` | 累加位：0 为 `C=A×B`，1 为 `C=C_old+A×B` |
+| 保留位 | `rs1[31:16]`、`rs2[31:9]` 必须为 0 |
 
 A、B 为行主序 16×signed INT8；C 为 4 行、每行 4 个 signed INT32，按 row-major
-打包到 128 bit。结果顺序为 `C[0][0] ... C[3][3]`。
+打包到 128 bit。累加模式会先读取 C 的四行作为 accumulator 初值，适合软件执行
+K 维分块。结果顺序为 `C[0][0] ... C[3][3]`。
+
+### 5.5 `MT_EPILOGUE`
+
+`funct7=0000110`、`funct3=000`。读取四行 INT32 C、四行 INT32 Bias 和一行量化配置，写回一行 packed INT8。
+
+| 字段 | 语义 |
+| --- | --- |
+| `rs1[7:0]` | C 起始 UB 行，使用 `C..C+3` |
+| `rs1[15:8]` | Bias 起始 UB 行，使用 `Bias..Bias+3` |
+| `rs2[7:0]` | INT8 输出 UB 行 |
+| `rs2[15:8]` | quant config UB 行 |
+| 保留位 | `rs1[31:16]`、`rs2[31:16]` 必须为 0 |
+
+Config 行字段：`[15:0]` signed multiplier，`[20:16]` arithmetic-right-shift，
+`[28:21]` signed zero point，`[29]` ReLU enable。每个元素执行
+`saturate_int8(ReLU((C + Bias) * multiplier >>> shift) + zero_point)`。
 
 ## 6. 顶层状态机
 
@@ -186,14 +208,14 @@ A、B 为行主序 16×signed INT8；C 为 4 行、每行 4 个 signed INT32，�
 ```text
 S_IDLE -> S_WAIT_COMMIT -> S_DISPATCH
                               |
-             +----------------+----------------+
-             |                |                |
-             v                v                v
-       S_DMA_START      S_VEC_READ_A    S_TENSOR_START
-             |                |                |
-       S_DMA_WAIT       ...S_VEC_WAIT    S_TENSOR_WAIT
-             |                |                |
-             +----------------+----------------+
+             +----------------+----------------+-------------------+
+             |                |                |                   |
+             v                v                v                   v
+       S_DMA_START      S_VEC_READ_A    S_TENSOR_START     S_EPILOGUE_START
+             |                |                |                   |
+       S_DMA_WAIT       ...S_VEC_WAIT    S_TENSOR_WAIT      S_EPILOGUE_WAIT
+             |                |                |                   |
+             +----------------+----------------+-------------------+
                               v
                          S_RESULT -> S_IDLE
 ```
@@ -204,6 +226,7 @@ S_IDLE -> S_WAIT_COMMIT -> S_DISPATCH
 - Vector 路径：同步读 A、同步读 B，分别装入 VRF `v1/v2`，发出内部 VPU 指令，
   等待 `v3` 结果，再写回指定 UB 行。
 - Tensor 路径：启动 `tensor_controller`，等待四行结果写回完成。
+- Epilogue 路径：同步读取 C/Bias/config，完成量化并写回一行 UB。
 - `S_RESULT`：保持 CV-X-IF result，直到 `result_valid && result_ready`。
 
 ### 6.1 DMA 子状态机
@@ -265,6 +288,7 @@ commit kill 仅在命令产生副作用前生效。已正常 commit 的命令不
 | DMA Load/Store | 每行一次外部事务；Load 另有一拍响应等待，Store 另有一拍 UB 同步读 |
 | Vector | 两次 UB 同步读 + VRF 装载 + 一次 ALU 执行 + 一次结果写回 |
 | GEMM | 两次 UB 同步读 + 10 个 MXU 运行周期 + 4 次 UB 结果写 |
+| Epilogue | 9 次 UB 同步读（C/Bias/config）+ 1 次 UB 结果写 |
 
 实际总延迟由 `ready/valid` 反压、外部内存响应和 CPU result 接收时刻决定。当前实现
 不重叠 DMA 与计算，也不隐藏 UB 读延迟。
@@ -278,13 +302,16 @@ make vrf-sim      # VRF 读写和 Byte mask
 make ub-sim       # UB 同步读、写使能和越界行为
 make dma-sim      # Memory <-> UB 双向 DMA
 make tensor-sim   # 4x4 signed INT8 GEMM core
+make tensor-controller-sim # Tensor controller 同步 UB 读写和累加
+make epilogue-sim # Bias、requantization、饱和和 ReLU 核心
 make regress      # 执行全部回归
 ```
 
 顶层闭环应覆盖：
 
 - `MT_LOAD → Vector → MT_STORE` 的 Memory→UB→VPU→UB→Memory 路径；
-- 两次 `MT_LOAD → MT_GEMM → 四行 MT_STORE` 的 Tile 路径；
+- 两次 `MT_LOAD → MT_GEMM → accumulate MT_GEMM → 四行 MT_STORE` 的 Tile 路径；
+- `MT_GEMM → MT_EPILOGUE → MT_STORE` 的量化闭环，覆盖 Bias、零点、ReLU 和上下溢饱和；
 - commit 前无副作用、非法参数返回 `err`、kill 命令无写入；
 - result backpressure、外部 memory backpressure 和 UB 中间结果检查；
 - signed INT8/INT32 乘加的 identity 与随机黄金模型对比。
@@ -305,8 +332,7 @@ UB 仲裁、结果打包和测试平台，不能只调整单个模块参数。
 
 建议演进顺序：
 
-1. 为 GEMM 增加 K 维分块累加，以及 Bias、Requant、ReLU Epilogue。
-2. 引入双缓冲和多 Bank UB，使 DMA 与计算能够重叠。
-3. 增加命令队列、多个 outstanding DMA 和更细粒度的 owner/仲裁协议。
-4. 评估 VPU 流水线化、可配置向量长度和更丰富的饱和/舍入语义。
-5. 如需 cacheable 地址，补充软件屏障或硬件一致性接口；当前 CV-X-IF 设计不包含该能力。
+1. 引入双缓冲和多 Bank UB，使 DMA 与计算能够重叠。
+2. 增加命令队列、多个 outstanding DMA 和更细粒度的 owner/仲裁协议。
+3. 评估 VPU/Tensor 流水线化、可配置向量长度和更丰富的舍入语义。
+4. 如需 cacheable 地址，补充软件屏障或硬件一致性接口；当前 CV-X-IF 设计不包含该能力。

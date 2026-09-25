@@ -7,6 +7,7 @@ module tensor_pe (
   input  logic rst,
   input  logic clear,
   input  logic step,
+  input  logic signed [31:0] acc_init,
   input  logic signed [7:0] a_in,
   input  logic signed [7:0] b_in,
   output logic signed [7:0] a_out,
@@ -21,7 +22,7 @@ module tensor_pe (
     if (rst || clear) begin
       a_out <= '0;
       b_out <= '0;
-      acc_out <= '0;
+      acc_out <= acc_init;
     end else if (step) begin
       a_out <= a_in;
       b_out <= b_in;

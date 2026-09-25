@@ -9,6 +9,7 @@ module tb_tensor_gemm_core;
   logic [127:0] cmd_a_tile, cmd_b_tile;
   logic result_valid, result_ready;
   logic [511:0] result_data;
+  logic [511:0] cmd_acc_init;
 
   tensor_gemm_core dut (
     .clk,
@@ -17,6 +18,7 @@ module tb_tensor_gemm_core;
     .cmd_ready,
     .cmd_a_tile,
     .cmd_b_tile,
+    .cmd_acc_init,
     .result_valid,
     .result_ready,
     .result_data
@@ -48,15 +50,34 @@ module tb_tensor_gemm_core;
     return reference;
   endfunction
 
+  function automatic logic [511:0] gemm_reference_with_init(
+      input logic [127:0] a_tile, input logic [127:0] b_tile,
+      input logic [511:0] acc_init);
+    logic signed [31:0] base_value;
+    logic signed [31:0] init_value;
+    logic signed [31:0] sum_value;
+    logic [511:0] reference;
+    reference = gemm_reference(a_tile, b_tile);
+    for (int i = 0; i < 16; i++) begin
+      base_value = $signed(reference[32*i +: 32]);
+      init_value = $signed(acc_init[32*i +: 32]);
+      sum_value = base_value + init_value;
+      reference[32*i +: 32] = sum_value;
+    end
+    return reference;
+  endfunction
+
   task automatic run_case(
-      input logic [127:0] a_tile, input logic [127:0] b_tile);
+      input logic [127:0] a_tile, input logic [127:0] b_tile,
+      input logic [511:0] acc_init);
     logic [511:0] expected_data;
     logic [511:0] held_data;
     begin
-      expected_data = gemm_reference(a_tile, b_tile);
+      expected_data = gemm_reference_with_init(a_tile, b_tile, acc_init);
       @(negedge clk);
       cmd_a_tile = a_tile;
       cmd_b_tile = b_tile;
+      cmd_acc_init = acc_init;
       cmd_valid = 1'b1;
       while (!cmd_ready) @(negedge clk);
       @(posedge clk);
@@ -87,6 +108,7 @@ module tb_tensor_gemm_core;
     cmd_valid = 1'b0;
     cmd_a_tile = '0;
     cmd_b_tile = '0;
+    cmd_acc_init = '0;
     result_ready = 1'b0;
     for (int i = 0; i < 16; i++) begin
       a_values[i] = (i % 5 == 0) ? 1 : 0;
@@ -94,10 +116,18 @@ module tb_tensor_gemm_core;
     end
     repeat (2) @(posedge clk);
     rst = 1'b0;
-    run_case(pack_i8(a_values), pack_i8(b_values));
+    run_case(pack_i8(a_values), pack_i8(b_values), '0);
     for (int test_index = 0; test_index < 25; test_index++) begin
       run_case({$urandom, $urandom, $urandom, $urandom},
-               {$urandom, $urandom, $urandom, $urandom});
+               {$urandom, $urandom, $urandom, $urandom}, '0);
+    end
+    for (int test_index = 0; test_index < 25; test_index++) begin
+      run_case({$urandom, $urandom, $urandom, $urandom},
+               {$urandom, $urandom, $urandom, $urandom},
+               {$urandom, $urandom, $urandom, $urandom,
+                $urandom, $urandom, $urandom, $urandom,
+                $urandom, $urandom, $urandom, $urandom,
+                $urandom, $urandom, $urandom, $urandom});
     end
     $display("PASS: 4x4 signed INT8 GEMM core passed identity and random tests");
     $finish;

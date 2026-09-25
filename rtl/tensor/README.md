@@ -17,6 +17,7 @@ C = A * B
 rs1[7:0]  = A UB row
 rs1[15:8] = B UB row
 rs2[7:0]  = C UB start row (C..C+3 must fit)
+rs2[8]    = accumulate (0: C=A*B, 1: C=C_old+A*B)
 ```
 
 All other operand bits are reserved and must be zero. The command is accepted
@@ -38,5 +39,13 @@ Epilogue/
 
 `tensor_gemm_core` runs a fixed 4x4 systolic array for ten cycles, holds its
 result under backpressure, and `tensor_controller` performs the two synchronous
-UB reads followed by four sequential result writes. Larger K tiles, bias,
-requantization, ReLU, double buffering, and pipelining remain future work.
+UB reads, optionally reads four existing C rows for accumulation, and then
+performs four sequential result writes. Multiple K tiles can therefore be
+issued by software using one initial GEMM followed by accumulate GEMMs.
+
+`tensor_epilogue_controller` reads four C rows, four Bias rows and one config
+row, while `tensor_epilogue_core` applies signed multiplier, arithmetic right
+shift, signed zero point, INT8 saturation and optional ReLU. `MT_EPILOGUE`
+uses `rs1[7:0]`/`rs1[15:8]` for C/Bias bases and `rs2[7:0]`/`rs2[15:8]` for
+output/config rows; all `rs1[31:16]` and `rs2[31:16]` bits are reserved.
+Double buffering and pipelining remain future work.

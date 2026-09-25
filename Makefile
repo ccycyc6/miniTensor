@@ -20,9 +20,13 @@ DMA_SOURCES := \
 
 TENSOR_SOURCES := \
 	$(CURDIR)/rtl/tensor/tensor_pkg.sv \
+	$(CURDIR)/rtl/memory/unified_buffer.sv \
 	$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_pe.sv \
 	$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_systolic_array.sv \
 	$(CURDIR)/rtl/tensor/MXU/INT8_GEMM/tensor_gemm_core.sv \
+	$(CURDIR)/rtl/tensor/tensor_controller.sv \
+	$(CURDIR)/rtl/tensor/Epilogue/tensor_epilogue_core.sv \
+	$(CURDIR)/rtl/tensor/Epilogue/tensor_epilogue_controller.sv \
 	$(CURDIR)/tb/tensor/tb_tensor_gemm_core.sv
 
 TOP_SOURCES := \
@@ -37,12 +41,14 @@ TOP_SOURCES := \
 	$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_systolic_array.sv \
 	$(CURDIR)/rtl/tensor/MXU/INT8_GEMM/tensor_gemm_core.sv \
 	$(CURDIR)/rtl/tensor/tensor_controller.sv \
+	$(CURDIR)/rtl/tensor/Epilogue/tensor_epilogue_core.sv \
+	$(CURDIR)/rtl/tensor/Epilogue/tensor_epilogue_controller.sv \
 	$(CURDIR)/rtl/memory/unified_buffer.sv \
 	$(CURDIR)/rtl/memory/vpu_dma.sv \
 	$(CURDIR)/rtl/top/mini_tensor_top.sv \
 	$(CURDIR)/tb/top/tb_mini_tensor_top.sv
 
-.PHONY: sim regress npc-sim vector-sim vrf-sim ub-sim dma-sim tensor-sim top-sim clean
+.PHONY: sim regress npc-sim vector-sim vrf-sim ub-sim dma-sim tensor-sim tensor-controller-sim epilogue-sim top-sim clean
 
 sim: top-sim
 
@@ -52,6 +58,8 @@ regress:
 	$(MAKE) ub-sim
 	$(MAKE) dma-sim
 	$(MAKE) tensor-sim
+	$(MAKE) tensor-controller-sim
+	$(MAKE) epilogue-sim
 	$(MAKE) top-sim
 
 npc-sim: top-sim
@@ -87,6 +95,27 @@ tensor-sim:
 	CCACHE_DISABLE=1 $(VERILATOR) $(COMMON_FLAGS) --Mdir $(OBJ_DIR)/tensor \
 		--top-module tb_tensor_gemm_core $(TENSOR_SOURCES)
 	$(OBJ_DIR)/tensor/Vtb_tensor_gemm_core
+
+tensor-controller-sim:
+	mkdir -p $(OBJ_DIR)/tensor_controller
+	CCACHE_DISABLE=1 $(VERILATOR) $(COMMON_FLAGS) --Mdir $(OBJ_DIR)/tensor_controller \
+		--top-module tb_tensor_controller \
+		$(CURDIR)/rtl/tensor/tensor_pkg.sv \
+		$(CURDIR)/rtl/memory/unified_buffer.sv \
+		$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_pe.sv \
+		$(CURDIR)/rtl/tensor/MXU/Systolic_Array/tensor_systolic_array.sv \
+		$(CURDIR)/rtl/tensor/MXU/INT8_GEMM/tensor_gemm_core.sv \
+		$(CURDIR)/rtl/tensor/tensor_controller.sv \
+		$(CURDIR)/tb/tensor/tb_tensor_controller.sv
+	$(OBJ_DIR)/tensor_controller/Vtb_tensor_controller
+
+epilogue-sim:
+	mkdir -p $(OBJ_DIR)/epilogue
+	CCACHE_DISABLE=1 $(VERILATOR) $(COMMON_FLAGS) --Mdir $(OBJ_DIR)/epilogue \
+		--top-module tb_tensor_epilogue \
+		$(CURDIR)/rtl/tensor/Epilogue/tensor_epilogue_core.sv \
+		$(CURDIR)/tb/tensor/tb_tensor_epilogue.sv
+	$(OBJ_DIR)/epilogue/Vtb_tensor_epilogue
 
 top-sim:
 	mkdir -p $(OBJ_DIR)/top

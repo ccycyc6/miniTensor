@@ -12,6 +12,7 @@ module tensor_controller #(
   input  logic [UB_ADDR_WIDTH-1:0] cmd_a_addr,
   input  logic [UB_ADDR_WIDTH-1:0] cmd_b_addr,
   input  logic [UB_ADDR_WIDTH-1:0] cmd_c_addr,
+  input  logic cmd_accumulate,
   output logic busy,
   output logic done,
 
@@ -30,6 +31,8 @@ module tensor_controller #(
     S_WAIT_A,
     S_READ_B,
     S_WAIT_B,
+    S_READ_C,
+    S_WAIT_C,
     S_CORE_START,
     S_CORE_WAIT,
     S_WRITE,
@@ -38,7 +41,10 @@ module tensor_controller #(
 
   state_t state_q;
   logic [UB_ADDR_WIDTH-1:0] a_addr_q, b_addr_q, c_addr_q;
+  logic accumulate_q;
   logic [tensor_pkg::TENSOR_TILE_WIDTH-1:0] a_tile_q, b_tile_q;
+  logic [tensor_pkg::TENSOR_RESULT_WIDTH-1:0] acc_init_q;
+  logic [1:0] c_read_index_q;
   logic [tensor_pkg::TENSOR_RESULT_WIDTH-1:0] result_q;
   logic [1:0] write_index_q;
   logic core_cmd_valid, core_cmd_ready;
@@ -52,8 +58,10 @@ module tensor_controller #(
   assign cmd_ready = (state_q == S_IDLE);
   assign busy = (state_q != S_IDLE);
   assign done = (state_q == S_DONE);
-  assign ub_rd_en = (state_q == S_READ_A) || (state_q == S_READ_B);
-  assign ub_rd_addr = (state_q == S_READ_A) ? a_addr_q : b_addr_q;
+  assign ub_rd_en = (state_q == S_READ_A) || (state_q == S_READ_B) ||
+      (state_q == S_READ_C);
+  assign ub_rd_addr = (state_q == S_READ_A) ? a_addr_q :
+      ((state_q == S_READ_B) ? b_addr_q : c_addr_q + UB_ADDR_WIDTH'(c_read_index_q));
   assign ub_wr_en = (state_q == S_WRITE);
   assign ub_wr_addr = c_addr_q + UB_ADDR_WIDTH'(write_index_q);
   assign ub_wr_data = result_q[128 * write_index_q +: 128];
@@ -68,6 +76,7 @@ module tensor_controller #(
     .cmd_ready(core_cmd_ready),
     .cmd_a_tile(a_tile_q),
     .cmd_b_tile(b_tile_q),
+    .cmd_acc_init(acc_init_q),
     .result_valid(core_result_valid),
     .result_ready(core_result_ready),
     .result_data(core_result_data)
@@ -79,8 +88,11 @@ module tensor_controller #(
       a_addr_q <= '0;
       b_addr_q <= '0;
       c_addr_q <= '0;
+      accumulate_q <= 1'b0;
       a_tile_q <= '0;
       b_tile_q <= '0;
+      acc_init_q <= '0;
+      c_read_index_q <= '0;
       result_q <= '0;
       write_index_q <= '0;
     end else begin
@@ -90,6 +102,9 @@ module tensor_controller #(
             a_addr_q <= cmd_a_addr;
             b_addr_q <= cmd_b_addr;
             c_addr_q <= cmd_c_addr;
+            accumulate_q <= cmd_accumulate;
+            acc_init_q <= '0;
+            c_read_index_q <= '0;
             state_q <= S_READ_A;
           end
         end
@@ -104,7 +119,23 @@ module tensor_controller #(
         S_WAIT_B: begin
           if (ub_rd_valid) begin
             b_tile_q <= ub_rd_data;
-            state_q <= S_CORE_START;
+            if (accumulate_q)
+              state_q <= S_READ_C;
+            else
+              state_q <= S_CORE_START;
+          end
+        end
+        S_READ_C: state_q <= S_WAIT_C;
+        S_WAIT_C: begin
+          if (ub_rd_valid) begin
+            acc_init_q[128 * c_read_index_q +: 128] <= ub_rd_data;
+            if (c_read_index_q == 2'd3) begin
+              c_read_index_q <= '0;
+              state_q <= S_CORE_START;
+            end else begin
+              c_read_index_q <= c_read_index_q + 1'b1;
+              state_q <= S_READ_C;
+            end
           end
         end
         S_CORE_START: begin
